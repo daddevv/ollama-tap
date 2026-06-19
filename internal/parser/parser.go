@@ -8,14 +8,14 @@ import (
 
 // OllamaStats holds per-request statistics from Ollama native API fields.
 type OllamaStats struct {
-	Model          string
-	Done           bool
-	PromptEval     int64 `json:"prompt_eval_count,omitempty"`
-	EvalCount      int64 `json:"eval_count,omitempty"`
+	Model           string
+	Done            bool
+	PromptEval      int64   `json:"prompt_eval_count,omitempty"`
+	EvalCount       int64   `json:"eval_count,omitempty"`
 	PromptEvalDurMs float64 `json:"prompt_eval_duration_ms,omitempty"`
-	EvalDurMs      float64 `json:"eval_duration_ms,omitempty"`
-	LoadDurMs      float64 `json:"load_duration_ms,omitempty"`
-	TotalsDuration float64 `json:"total_duration,omitempty"`
+	EvalDurMs       float64 `json:"eval_duration_ms,omitempty"`
+	LoadDurMs       float64 `json:"load_duration_ms,omitempty"`
+	TotalsDuration  float64 `json:"total_duration,omitempty"`
 }
 
 // ParseOllamaJSONL attempts to parse a line of Ollama native JSONL stream data.
@@ -23,7 +23,7 @@ type OllamaStats struct {
 func ParseOllamaJSONL(line string) (*OllamaStats, bool) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
-		return nil, false
+		return nil, true
 	}
 
 	stats := &OllamaStats{}

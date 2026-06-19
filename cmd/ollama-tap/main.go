@@ -8,10 +8,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openai/ollama-tap/internal/config"
-	"github.com/openai/ollama-tap/internal/health"
-	"github.com/openai/ollama-tap/internal/metrics"
-	"github.com/openai/ollama-tap/internal/proxy"
+	"github.com/daddevv/ollama-tap/internal/config"
+	"github.com/daddevv/ollama-tap/internal/health"
+	"github.com/daddevv/ollama-tap/internal/metrics"
+	"github.com/daddevv/ollama-tap/internal/proxy"
 )
 
 func main() {
@@ -37,8 +37,8 @@ func main() {
 		Addr:              cfg.ListenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       0,
-		WriteTimeout:      0,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 

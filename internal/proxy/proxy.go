@@ -3,18 +3,21 @@ package proxy
 import (
 	"bufio"
 	"bytes"
-		"io"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/openai/ollama-tap/internal/config"
-	"github.com/openai/ollama-tap/internal/logging"
-	"github.com/openai/ollama-tap/internal/metrics"
-	"github.com/openai/ollama-tap/internal/parser"
+	"github.com/daddevv/ollama-tap/internal/config"
+	"github.com/daddevv/ollama-tap/internal/logging"
+	"github.com/daddevv/ollama-tap/internal/metrics"
+	"github.com/daddevv/ollama-tap/internal/parser"
 )
+
+// streamChunkFlushThreshold controls how many chunks are buffered before writing to disk.
+const streamChunkFlushThreshold = 20
 
 // Proxy is the main transparent HTTP proxy.
 type Proxy struct {
@@ -32,9 +35,9 @@ func New(cfg *config.Config, m *metrics.Metrics) (*Proxy, error) {
 			Timeout:   10 * time.Second,
 			DualStack: true,
 		}).DialContext,
-		TLSHandshakeTimeout: 10 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 4716 * time.Millisecond,
-		DisableCompression:  false,
+		DisableCompression:    false,
 	}
 
 	client := &http.Client{
@@ -108,7 +111,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if bodyBytes != nil {
 		upstreamReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
-	p.copyRequestHeaders(upstreamReq.Header, r.Header)
+	p.copyRequestHeaders(upstreamReq.Header, r.Header, r)
 
 	// Client cancellation propagates to upstream via context.
 	resp, err := p.client.Do(upstreamReq.WithContext(r.Context()))
@@ -148,7 +151,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.metrics.RecordRequest(time.Since(start), isUpstreamStreaming)
 }
 
-func (p *Proxy) copyRequestHeaders(dst http.Header, src http.Header) {
+func (p *Proxy) copyRequestHeaders(dst http.Header, src http.Header, req *http.Request) {
 	skip := map[string]bool{
 		"Connection": true, "Keep-Alive": true,
 		"Proxy-Authenticate": true, "Proxy-Authorization": true,
@@ -173,8 +176,17 @@ func (p *Proxy) copyRequestHeaders(dst http.Header, src http.Header) {
 		dst[k] = vals
 	}
 
-	dst.Set("X-Forwarded-For", src.Get("X-Forwarded-For"))
-	dst.Set("X-Forwarded-Host", p.cfg.Upstream.Host)
+	xff := src.Get("X-Forwarded-For")
+	if xff != "" {
+		xff += ", "
+	}
+	remoteHost := req.RemoteAddr
+	if idx := strings.LastIndex(remoteHost, ":"); idx != -1 {
+		remoteHost = remoteHost[:idx]
+	}
+	xff += remoteHost
+	dst.Set("X-Forwarded-For", xff)
+	dst.Set("X-Forwarded-Host", req.Host)
 	dst.Set("X-Forwarded-Proto", "http")
 }
 
@@ -261,6 +273,7 @@ func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	var model string
+	var chunks []*logging.StreamChunk
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -272,7 +285,7 @@ func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http
 		if stats != nil {
 			model = stats.Model
 			done := stats.Done || stats.EvalCount > 0
-			p.logger.WriteStreamChunk(&logging.StreamChunk{
+			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "text",
 				Model:     stats.Model,
@@ -281,7 +294,7 @@ func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http
 				Time:      time.Now().UTC().Format(time.RFC3339Nano),
 			})
 			if hasExtra {
-				p.logger.WriteStreamChunk(&logging.StreamChunk{
+				chunks = append(chunks, &logging.StreamChunk{
 					ID:        id,
 					ChunkType: "extra",
 					Model:     stats.Model,
@@ -289,7 +302,7 @@ func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http
 				})
 			}
 		} else if p.cfg.CaptureStreamChunks {
-			p.logger.WriteStreamChunk(&logging.StreamChunk{
+			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "raw",
 				Delta:     line[:min(len(line), 512)],
@@ -298,6 +311,15 @@ func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http
 		}
 
 		w.Write([]byte(line + "\n"))
+
+		if len(chunks) >= streamChunkFlushThreshold {
+			p.logger.WriteStreamChunks(chunks)
+			chunks = nil
+		}
+	}
+
+	if len(chunks) > 0 {
+		p.logger.WriteStreamChunks(chunks)
 	}
 
 	return model
@@ -308,6 +330,7 @@ func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Fl
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	var model string
+	var chunks []*logging.StreamChunk
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -334,7 +357,7 @@ func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Fl
 
 		if parser.IsUsageEvent(obj) {
 			usage := parser.ParseOpenAIUsage(obj)
-			p.logger.WriteStreamChunk(&logging.StreamChunk{
+			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "usage",
 				Model:     model,
@@ -343,7 +366,7 @@ func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Fl
 				Time:      time.Now().UTC().Format(time.RFC3339Nano),
 			})
 		} else if delta, _ := parser.ExtractDelta(obj); delta != "" {
-			p.logger.WriteStreamChunk(&logging.StreamChunk{
+			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "text",
 				Model:     model,
@@ -351,7 +374,7 @@ func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Fl
 				Time:      time.Now().UTC().Format(time.RFC3339Nano),
 			})
 		} else if p.cfg.CaptureStreamChunks {
-			p.logger.WriteStreamChunk(&logging.StreamChunk{
+			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "text",
 				Model:     model,
@@ -360,7 +383,16 @@ func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Fl
 			})
 		}
 
+		if len(chunks) >= streamChunkFlushThreshold {
+			p.logger.WriteStreamChunks(chunks)
+			chunks = nil
+		}
+
 		flusher.Flush()
+	}
+
+	if len(chunks) > 0 {
+		p.logger.WriteStreamChunks(chunks)
 	}
 
 	return model

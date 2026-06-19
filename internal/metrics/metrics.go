@@ -6,15 +6,15 @@ import (
 )
 
 type Metrics struct {
-	totalRequests     atomic.Int64
+	totalRequests      atomic.Int64
 	totalUpstreamBytes atomic.Int64
-	totalClientBytes  atomic.Int64
-	streamingCount    atomic.Int64
-	nonStreamingCount atomic.Int64
-	activeConnections atomic.Int64
-	failedRequests    atomic.Int64
+	totalClientBytes   atomic.Int64
+	streamingCount     atomic.Int64
+	nonStreamingCount  atomic.Int64
+	activeConnections  atomic.Int64
+	failedRequests     atomic.Int64
 
-	firstSeen time.Time
+	firstSeen   time.Time
 	lastSeenSec int64 // Unix seconds, for atomic access
 }
 
@@ -38,12 +38,12 @@ func (m *Metrics) RecordRequest(duration time.Duration, streaming bool) {
 func (m *Metrics) RecordUpstreamBytes(n int64) { m.totalUpstreamBytes.Add(n) }
 func (m *Metrics) RecordClientBytes(n int64)   { m.totalClientBytes.Add(n) }
 
-func (m *Metrics) IncrementActive()  { m.activeConnections.Add(1) }
-func (m *Metrics) DecrementActive()  { m.activeConnections.Add(-1) }
-func (m *Metrics) RecordFailure()    { m.failedRequests.Add(1) }
+func (m *Metrics) IncrementActive() { m.activeConnections.Add(1) }
+func (m *Metrics) DecrementActive() { m.activeConnections.Add(-1) }
+func (m *Metrics) RecordFailure()   { m.failedRequests.Add(1) }
 
 type Snapshot struct {
-	TotalRequests     int64 `json:"total_requests"`
+	TotalRequests     int64  `json:"total_requests"`
 	Uptime            string `json:"uptime"`
 	LastRequest       int64  `json:"last_request_unix"`
 	StreamingCount    int64  `json:"streaming_connections"`

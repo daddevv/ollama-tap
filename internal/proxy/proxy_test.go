@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openai/ollama-tap/internal/config"
-	"github.com/openai/ollama-tap/internal/metrics"
+	"github.com/daddevv/ollama-tap/internal/config"
+	"github.com/daddevv/ollama-tap/internal/metrics"
 )
 
 func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {

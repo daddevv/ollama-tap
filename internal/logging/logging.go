@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/openai/ollama-tap/internal/parser"
+	"github.com/daddevv/ollama-tap/internal/parser"
 )
 
 type Logger struct {
@@ -25,15 +25,15 @@ func RecordID() string {
 }
 
 type RequestLog struct {
-	ID      string            `json:"id"`
-	Model   string            `json:"model,omitempty"`
-	ReqType string            `json:"req_type"`
-	Method  string            `json:"method"`
-	Path    string            `json:"path"`
-	URL     string            `json:"url"`
+	ID      string              `json:"id"`
+	Model   string              `json:"model,omitempty"`
+	ReqType string              `json:"req_type"`
+	Method  string              `json:"method"`
+	Path    string              `json:"path"`
+	URL     string              `json:"url"`
 	Headers map[string][]string `json:"headers,omitempty"`
-	Body    string            `json:"body,omitempty"`
-	Time    string            `json:"time"`
+	Body    string              `json:"body,omitempty"`
+	Time    string              `json:"time"`
 }
 
 func (l *Logger) WriteRequestLog(r *RequestLog) error {
@@ -47,11 +47,11 @@ func (l *Logger) WriteRequestLog(r *RequestLog) error {
 }
 
 type ResponsePreview struct {
-	ID         string            `json:"id"`
-	StatusCode int               `json:"status_code"`
+	ID         string              `json:"id"`
+	StatusCode int                 `json:"status_code"`
 	Headers    map[string][]string `json:"headers,omitempty"`
-	Body       string            `json:"body_preview,omitempty"`
-	Time       string            `json:"time"`
+	Body       string              `json:"body_preview,omitempty"`
+	Time       string              `json:"time"`
 }
 
 func (l *Logger) WriteResponsePreview(p *ResponsePreview) error {
@@ -85,24 +85,24 @@ func (l *Logger) WriteStreamChunk(c *StreamChunk) error {
 }
 
 type Summary struct {
-	ID             string  `json:"id"`
-	Model          string  `json:"model,omitempty"`
-	ReqType        string  `json:"req_type"`
-	Method         string  `json:"method"`
-	Path           string  `json:"path"`
-	DurationMs     float64 `json:"duration_ms"`
-	UpstreamBytes  int64   `json:"uplink_bytes"`
-	ClientBytes    int64   `json:"downlink_bytes"`
-	PromptEvalCnt  int64   `json:"prompt_eval_count,omitempty"`
-	EvalCnt        int64   `json:"eval_count,omitempty"`
+	ID              string  `json:"id"`
+	Model           string  `json:"model,omitempty"`
+	ReqType         string  `json:"req_type"`
+	Method          string  `json:"method"`
+	Path            string  `json:"path"`
+	DurationMs      float64 `json:"duration_ms"`
+	UpstreamBytes   int64   `json:"uplink_bytes"`
+	ClientBytes     int64   `json:"downlink_bytes"`
+	PromptEvalCnt   int64   `json:"prompt_eval_count,omitempty"`
+	EvalCnt         int64   `json:"eval_count,omitempty"`
 	PromptEvalDurMs float64 `json:"prompt_eval_duration_ms,omitempty"`
-	EvalDurMs      float64 `json:"eval_duration_ms,omitempty"`
-	LoadDurMs      float64 `json:"load_duration_ms,omitempty"`
-	TotalDurMs     float64 `json:"total_duration_ms,omitempty"`
-	UsagePromptTok int64   `json:"usage_prompt_tokens,omitempty"`
-	UsageCompTok   int64   `json:"usage_completion_tokens,omitempty"`
-	UsageTotalTok  int64   `json:"usage_total_tokens,omitempty"`
-	Time           string  `json:"time"`
+	EvalDurMs       float64 `json:"eval_duration_ms,omitempty"`
+	LoadDurMs       float64 `json:"load_duration_ms,omitempty"`
+	TotalDurMs      float64 `json:"total_duration_ms,omitempty"`
+	UsagePromptTok  int64   `json:"usage_prompt_tokens,omitempty"`
+	UsageCompTok    int64   `json:"usage_completion_tokens,omitempty"`
+	UsageTotalTok   int64   `json:"usage_total_tokens,omitempty"`
+	Time            string  `json:"time"`
 }
 
 func (l *Logger) WriteSummary(s *Summary) error {
@@ -130,4 +130,19 @@ func extractStats(ollamaStats *parser.OllamaStats, usage *parser.OpenAIUsage) (i
 func encode(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// WriteStreamChunks writes multiple stream chunks in a single file open.
+func (l *Logger) WriteStreamChunks(chunks []*StreamChunk) error {
+	f, err := os.OpenFile(filepath.Join(l.logDir, fmt.Sprintf("chunks_%s.jsonl", chunks[0].ID)), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for _, c := range chunks {
+		if _, err := f.Write(encode(c)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

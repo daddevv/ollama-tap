@@ -14,12 +14,12 @@ func TestWriteRequestLog(t *testing.T) {
 
 	id := RecordID()
 	r := &RequestLog{
-		ID:     id,
-		Model:  "qwen3.6",
+		ID:      id,
+		Model:   "qwen3.6",
 		ReqType: "openai_chat",
-		Method: "POST",
-		Path:   "/v1/chat/completions",
-		Time:   "2024-01-01T00:00:00Z",
+		Method:  "POST",
+		Path:    "/v1/chat/completions",
+		Time:    "2024-01-01T00:00:00Z",
 	}
 
 	if err := l.WriteRequestLog(r); err != nil {
@@ -76,15 +76,15 @@ func TestWriteSummary(t *testing.T) {
 
 	id := RecordID()
 	s := &Summary{
-		ID:           id,
-		Model:        "qwen3.6",
-		ReqType:      "ollama_native",
-		Method:       "POST",
-		Path:         "/api/chat",
-		DurationMs:   1234.5,
+		ID:            id,
+		Model:         "qwen3.6",
+		ReqType:       "ollama_native",
+		Method:        "POST",
+		Path:          "/api/chat",
+		DurationMs:    1234.5,
 		UpstreamBytes: 100,
-		ClientBytes:  42,
-		Time:         "2024-01-01T00:00:00Z",
+		ClientBytes:   42,
+		Time:          "2024-01-01T00:00:00Z",
 	}
 
 	if err := l.WriteSummary(s); err != nil {
@@ -105,20 +105,20 @@ func TestWriteSummaryWithUsage(t *testing.T) {
 
 	id := RecordID()
 	s := &Summary{
-		ID:              id,
-		Model:           "qwen3.6",
-		ReqType:         "openai_chat",
-		Method:          "POST",
-		Path:            "/v1/chat/completions",
-		DurationMs:      1234.5,
-		UpstreamBytes:   100,
-		ClientBytes:     42,
-		PromptEvalCnt:   10,
-		EvalCnt:         42,
-		UsagePromptTok:  10,
-		UsageCompTok:    42,
-		UsageTotalTok:   52,
-		Time:            "2024-01-01T00:00:00Z",
+		ID:             id,
+		Model:          "qwen3.6",
+		ReqType:        "openai_chat",
+		Method:         "POST",
+		Path:           "/v1/chat/completions",
+		DurationMs:     1234.5,
+		UpstreamBytes:  100,
+		ClientBytes:    42,
+		PromptEvalCnt:  10,
+		EvalCnt:        42,
+		UsagePromptTok: 10,
+		UsageCompTok:   42,
+		UsageTotalTok:  52,
+		Time:           "2024-01-01T00:00:00Z",
 	}
 
 	if err := l.WriteSummary(s); err != nil {

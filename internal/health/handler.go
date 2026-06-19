@@ -2,8 +2,8 @@ package health
 
 import (
 	"encoding/json"
+	"github.com/daddevv/ollama-tap/internal/metrics"
 	"net/http"
-		"github.com/openai/ollama-tap/internal/metrics"
 )
 
 type HealthHandler struct {

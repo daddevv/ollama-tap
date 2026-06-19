@@ -7,13 +7,13 @@ import (
 
 func TestParseOllamaJSONL(t *testing.T) {
 	tests := []struct {
-		name     string
-		line     string
-		wantDone bool
+		name      string
+		line      string
+		wantDone  bool
 		wantModel string
-		wantEval int64
-		hasExtra bool
-		wantNil  bool
+		wantEval  int64
+		hasExtra  bool
+		wantNil   bool
 	}{
 		{
 			name:      "text chunk",
