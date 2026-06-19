@@ -80,7 +80,7 @@ func (l *Logger) WriteStreamChunk(c *StreamChunk) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(encode(c))
+	_, err = f.Write(append(encode(c), '\n'))
 	return err
 }
 
@@ -163,7 +163,7 @@ func (l *Logger) WriteStreamChunks(chunks []*StreamChunk) error {
 	}
 	defer f.Close()
 	for _, c := range chunks {
-		if _, err := f.Write(encode(c)); err != nil {
+		if _, err := f.Write(append(encode(c), '\n')); err != nil {
 			return err
 		}
 	}

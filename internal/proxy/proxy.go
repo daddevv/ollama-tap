@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -133,7 +134,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isUpstreamStreaming := isStreamResponse(resp) || r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate"
 
 	if isUpstreamStreaming {
-		p.handleStreaming(w, resp.Body, id, streamType, start)
+		p.handleStreaming(r.Context(), w, resp.Body, id, streamType, start)
 	} else {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		w.Write(bodyData)
@@ -256,7 +257,7 @@ func isStreamResponse(resp *http.Response) bool {
 }
 
 // handleStreaming forwards the response body incrementally while extracting stats.
-func (p *Proxy) handleStreaming(w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time) {
+func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -266,22 +267,28 @@ func (p *Proxy) handleStreaming(w http.ResponseWriter, body io.Reader, id string
 	var statsModel string
 	switch streamType {
 	case "ollama_native":
-		statsModel = p.handleNDJSON(body, w, flusher, id)
+		statsModel = p.handleNDJSON(ctx, body, w, flusher, id)
 	default:
-		statsModel = p.handleSSE(body, w, flusher, id)
+		statsModel = p.handleSSE(ctx, body, w, flusher, id)
 	}
 
 	p.logSummary(id, streamType, start, "", "", nil, statsModel, nil, "")
 }
 
 // handleNDJSON reads Ollama native newline-delimited JSON and streams it to the client.
-func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
+func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	var model string
 	var chunks []*logging.StreamChunk
 
 	for scanner.Scan() {
+		// Early exit if client disconnected.
+		select {
+		case <-ctx.Done():
+			return model
+		default:
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -332,13 +339,19 @@ func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http
 }
 
 // handleSSE reads OpenAI-compatible SSE stream and streams to the client.
-func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
+func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	var model string
 	var chunks []*logging.StreamChunk
 
 	for scanner.Scan() {
+		// Early exit if client disconnected.
+		select {
+		case <-ctx.Done():
+			return model
+		default:
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
