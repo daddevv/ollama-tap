@@ -3,7 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
-	"io"
+		"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -61,10 +61,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := logging.RecordID()
 	streamType := requestType(r.URL.Path)
 
-	// Capture request body once
+	// Always capture body bytes so we can forward and optionally log it.
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err == nil && len(bodyBytes) > 0 {
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	} else if r.Body != nil {
+		r.Body.Close()
+		bodyBytes = nil
+	}
+
+	// Log request metadata when capture is enabled.
+	if p.cfg.CaptureRequests && bodyBytes != nil && len(bodyBytes) > 0 {
 		p.logger.WriteRequestLog(&logging.RequestLog{
 			ID:      id,
 			Model:   "",
@@ -80,7 +87,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 
-	// Build upstream request from captured data
+	// Build upstream request from captured data.
 	upstreamReq := &http.Request{
 		Method: r.Method,
 		URL: &url.URL{
@@ -89,36 +96,37 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Path:     r.URL.Path,
 			RawQuery: r.URL.RawQuery,
 		},
-		Header: make(http.Header),
-		Host:   p.cfg.Upstream.Host,
-		Close:  false,
+		Header:        make(http.Header),
+		Host:          p.cfg.Upstream.Host,
+		Close:         false,
+		RemoteAddr:    r.RemoteAddr,
+		ContentLength: int64(len(bodyBytes)),
 	}
 	if r.URL.RawPath != "" {
 		upstreamReq.URL.RawPath = r.URL.RawPath
 	}
-
-	p.copyRequestHeaders(upstreamReq.Header, r.Header)
-
-	if bodyBytes != nil && len(bodyBytes) > 0 {
+	if bodyBytes != nil {
 		upstreamReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
+	p.copyRequestHeaders(upstreamReq.Header, r.Header)
 
-	// Execute upstream request
-	resp, err := p.client.Do(upstreamReq)
+	// Client cancellation propagates to upstream via context.
+	resp, err := p.client.Do(upstreamReq.WithContext(r.Context()))
 	if err != nil {
 		p.metrics.RecordFailure()
-		http.Error(w, "upstream error", http.StatusBadGateway)
+		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Copy response headers to client (strip hop-by-hop)
+	// Copy response headers to client (strip hop-by-hop).
 	copyNonReservedHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 
-	isStreaming := isStreamResponse(resp) || r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate"
+	// Detect whether upstream is streaming.
+	isUpstreamStreaming := isStreamResponse(resp) || r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate"
 
-	if isStreaming {
+	if isUpstreamStreaming {
 		p.handleStreaming(w, resp.Body, id, streamType, start)
 	} else {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -137,137 +145,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.logSummary(id, streamType, start, r.Method, r.URL.Path, bodyData, "", nil)
 	}
 
-	p.metrics.RecordRequest(time.Since(start), isStreaming)
-}
-
-func (p *Proxy) handleStreaming(w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	var statsModel string
-	switch streamType {
-	case "ollama_native":
-		statsModel = p.handleNDJSON(body, w, flusher, id)
-	default:
-		statsModel = p.handleSSE(body, w, flusher, id)
-	}
-
-	p.logSummary(id, streamType, start, "", "", nil, statsModel, nil)
-}
-
-func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) (model string) {
-	var lastEval int64
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		w.Write([]byte(line + "\n"))
-
-		stats, hasExtra := parser.ParseOllamaJSONL(line)
-		if stats != nil {
-			lastEval = stats.EvalCount
-			flusher.Flush()
-		}
-
-		if p.cfg.CaptureStreamChunks && (hasExtra || lastEval > 0) {
-			p.logger.WriteStreamChunk(&logging.StreamChunk{
-				ID:        id,
-				ChunkType: "text",
-				Model:     stats.Model,
-				Done:      true,
-				Time:      time.Now().UTC().Format(time.RFC3339Nano),
-			})
-		}
-
-		flusher.Flush()
-	}
-
-	return ""
-}
-
-func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) (model string) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		w.Write([]byte(line + "\n"))
-
-		if strings.HasPrefix(line, "data: ") {
-			obj, ok := parser.ParseOpenAISSEEvent(line)
-			if !ok {
-				flusher.Flush()
-				continue
-			}
-
-			if m := parser.ParseResponsesModel(obj); m != "" && model == "" {
-				model = m
-			}
-
-			if parser.IsUsageEvent(obj) {
-				usage := parser.ParseOpenAIUsage(obj)
-				p.logger.WriteStreamChunk(&logging.StreamChunk{
-					ID:        id,
-					ChunkType: "usage",
-					Model:     model,
-					TokenCnt:  usage.CompletionTokens,
-					Done:      true,
-					Time:      time.Now().UTC().Format(time.RFC3339Nano),
-				})
-			} else if delta, _ := parser.ExtractDelta(obj); delta != "" {
-				p.logger.WriteStreamChunk(&logging.StreamChunk{
-					ID:        id,
-					ChunkType: "text",
-					Model:     model,
-					Delta:     delta[:min(len(delta), 512)],
-					Time:      time.Now().UTC().Format(time.RFC3339Nano),
-				})
-			}
-
-			flusher.Flush()
-		} else {
-			flusher.Flush()
-		}
-	}
-
-	return model
-}
-
-func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path string, body []byte, statsModel string, usage *parser.OpenAIUsage) {
-	s := &logging.Summary{
-		ID:        id,
-		Model:     statsModel,
-		ReqType:   streamType,
-		Method:    method,
-		Path:      path,
-		DurationMs: time.Since(start).Seconds() * 1000,
-		Time:       time.Now().UTC().Format(time.RFC3339Nano),
-	}
-
-	if body != nil {
-		s.UpstreamBytes = int64(len(body))
-		s.ClientBytes = int64(len(body))
-	}
-
-	if usage != nil {
-		s.UsagePromptTok = usage.PromptTokens
-		s.UsageCompTok = usage.CompletionTokens
-		s.UsageTotalTok = usage.TotalTokens
-	}
-
-	p.logger.WriteSummary(s)
+	p.metrics.RecordRequest(time.Since(start), isUpstreamStreaming)
 }
 
 func (p *Proxy) copyRequestHeaders(dst http.Header, src http.Header) {
@@ -356,8 +234,162 @@ func requestType(path string) string {
 func isStreamResponse(resp *http.Response) bool {
 	ct := resp.Header.Get("Content-Type")
 	return strings.Contains(ct, "text/event-stream") ||
-		strings.Contains(ct, "application/x-ndjson") ||
-		strings.Contains(ct, "application/json")
+		strings.Contains(ct, "application/x-ndjson")
+}
+
+// handleStreaming forwards the response body incrementally while extracting stats.
+func (p *Proxy) handleStreaming(w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	var statsModel string
+	switch streamType {
+	case "ollama_native":
+		statsModel = p.handleNDJSON(body, w, flusher, id)
+	default:
+		statsModel = p.handleSSE(body, w, flusher, id)
+	}
+
+	p.logSummary(id, streamType, start, "", "", nil, statsModel, nil)
+}
+
+// handleNDJSON reads Ollama native newline-delimited JSON and streams it to the client.
+func (p *Proxy) handleNDJSON(body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	var model string
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		stats, hasExtra := parser.ParseOllamaJSONL(line)
+		if stats != nil {
+			model = stats.Model
+			done := stats.Done || stats.EvalCount > 0
+			p.logger.WriteStreamChunk(&logging.StreamChunk{
+				ID:        id,
+				ChunkType: "text",
+				Model:     stats.Model,
+				Done:      done,
+				TokenCnt:  stats.EvalCount,
+				Time:      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			if hasExtra {
+				p.logger.WriteStreamChunk(&logging.StreamChunk{
+					ID:        id,
+					ChunkType: "extra",
+					Model:     stats.Model,
+					Time:      time.Now().UTC().Format(time.RFC3339Nano),
+				})
+			}
+		} else if p.cfg.CaptureStreamChunks {
+			p.logger.WriteStreamChunk(&logging.StreamChunk{
+				ID:        id,
+				ChunkType: "raw",
+				Delta:     line[:min(len(line), 512)],
+				Time:      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+		w.Write([]byte(line + "\n"))
+	}
+
+	return model
+}
+
+// handleSSE reads OpenAI-compatible SSE stream and streams to the client.
+func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	var model string
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		w.Write([]byte(line + "\n"))
+
+		if !strings.HasPrefix(line, "data: ") {
+			flusher.Flush()
+			continue
+		}
+		dataStr := line[6:]
+		obj, ok := parser.ParseOpenAISSEEvent("data: " + dataStr)
+		if !ok {
+			flusher.Flush()
+			continue
+		}
+
+		if m := parser.ParseResponsesModel(obj); m != "" && model == "" {
+			model = m
+		}
+
+		if parser.IsUsageEvent(obj) {
+			usage := parser.ParseOpenAIUsage(obj)
+			p.logger.WriteStreamChunk(&logging.StreamChunk{
+				ID:        id,
+				ChunkType: "usage",
+				Model:     model,
+				TokenCnt:  usage.CompletionTokens,
+				Done:      true,
+				Time:      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		} else if delta, _ := parser.ExtractDelta(obj); delta != "" {
+			p.logger.WriteStreamChunk(&logging.StreamChunk{
+				ID:        id,
+				ChunkType: "text",
+				Model:     model,
+				Delta:     delta[:min(len(delta), 512)],
+				Time:      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		} else if p.cfg.CaptureStreamChunks {
+			p.logger.WriteStreamChunk(&logging.StreamChunk{
+				ID:        id,
+				ChunkType: "text",
+				Model:     model,
+				Delta:     dataStr[:min(len(dataStr), 512)],
+				Time:      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+		flusher.Flush()
+	}
+
+	return model
+}
+
+// logSummary writes a per-request summary record.
+func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path string, body []byte, statsModel string, usage *parser.OpenAIUsage) {
+	s := &logging.Summary{
+		ID:         id,
+		Model:      statsModel,
+		ReqType:    streamType,
+		Method:     method,
+		Path:       path,
+		DurationMs: time.Since(start).Seconds() * 1000,
+		Time:       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+
+	if body != nil {
+		s.UpstreamBytes = int64(len(body))
+		s.ClientBytes = int64(len(body))
+	}
+
+	if usage != nil {
+		s.UsagePromptTok = usage.PromptTokens
+		s.UsageCompTok = usage.CompletionTokens
+		s.UsageTotalTok = usage.TotalTokens
+	}
+
+	p.logger.WriteSummary(s)
 }
 
 func headerMap(h http.Header) map[string][]string {

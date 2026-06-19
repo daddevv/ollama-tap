@@ -4,7 +4,7 @@
 dll.*
 *.so
 *.dylib
-ollama-tap
+bin/ollama-tap
 
 # Test binaries
 *.test
