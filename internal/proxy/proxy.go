@@ -19,7 +19,6 @@ import (
 )
 
 // defaultResponseHeaderTimeout is the timeout for reading the upstream response header.
-// The value 4716ms was chosen empirically and should be revisited when a rationale is known.
 const defaultResponseHeaderTimeout = 15000 * time.Millisecond
 
 // streamChunkFlushThreshold controls how many chunks are buffered before writing to disk.
@@ -280,12 +279,7 @@ func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body
 	}
 
 	var statsModel string
-	switch streamType {
-	case "ollama_native":
-		statsModel = p.handleNDJSON(ctx, body, w, flusher, id)
-	default:
-		statsModel = p.handleSSE(ctx, body, w, flusher, id)
-	}
+	statsModel = p.handleNDJSON(ctx, body, w, flusher, id)
 
 	if err := p.logSummary(id, streamType, start, "", "", nil, statsModel, nil, ""); err != nil {
 		log.Printf("ollama-tap: failed to write summary for %s: %v", id, err)
