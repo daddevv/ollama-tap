@@ -117,6 +117,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp, err := p.client.Do(upstreamReq.WithContext(r.Context()))
 	if err != nil {
 		p.metrics.RecordFailure()
+		timeNow := time.Now().UTC().Format(time.RFC3339Nano)
+		p.logger.WriteError(&logging.Error{ID: id, Type: "upstream_error", ErrorMsg: err.Error(), Time: timeNow})
+		p.logSummary(id, streamType, start, r.Method, r.URL.Path, nil, "", nil, "upstream_error")
 		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -148,7 +151,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		p.logSummary(id, streamType, start, r.Method, r.URL.Path, bodyData, "", nil)
+		p.logSummary(id, streamType, start, r.Method, r.URL.Path, bodyData, "", nil, "")
 	}
 
 	p.metrics.RecordRequest(time.Since(start), isUpstreamStreaming)
@@ -268,7 +271,7 @@ func (p *Proxy) handleStreaming(w http.ResponseWriter, body io.Reader, id string
 		statsModel = p.handleSSE(body, w, flusher, id)
 	}
 
-	p.logSummary(id, streamType, start, "", "", nil, statsModel, nil)
+	p.logSummary(id, streamType, start, "", "", nil, statsModel, nil, "")
 }
 
 // handleNDJSON reads Ollama native newline-delimited JSON and streams it to the client.
@@ -402,7 +405,7 @@ func (p *Proxy) handleSSE(body io.Reader, w http.ResponseWriter, flusher http.Fl
 }
 
 // logSummary writes a per-request summary record.
-func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path string, body []byte, statsModel string, usage *parser.OpenAIUsage) {
+func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path string, body []byte, statsModel string, usage *parser.OpenAIUsage, errType string) {
 	s := &logging.Summary{
 		ID:         id,
 		Model:      statsModel,
@@ -411,6 +414,7 @@ func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path 
 		Path:       path,
 		DurationMs: time.Since(start).Seconds() * 1000,
 		Time:       time.Now().UTC().Format(time.RFC3339Nano),
+		ErrType:      errType,
 	}
 
 	if body != nil {

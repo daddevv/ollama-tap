@@ -101,7 +101,6 @@ type Summary struct {
 	TotalDurMs      float64 `json:"total_duration_ms,omitempty"`
 	UsagePromptTok  int64   `json:"usage_prompt_tokens,omitempty"`
 	UsageCompTok    int64   `json:"usage_completion_tokens,omitempty"`
-	ErrType         string  `json:"error_type,omitempty"`
 	UsageTotalTok   int64   `json:"usage_total_tokens,omitempty"`
 	Time            string  `json:"time"`
 }
@@ -135,12 +134,12 @@ func encode(v any) []byte {
 
 // Error represents an error or failure that occurred during request processing.
 type Error struct {
-	ID           string `json:"id"`
-	Type         string `json:"error_type,omitempty"`
-	ErrorMsg     string `json:"error_message,omitempty"`
-	Time         string `json:"time"`
-	PanicStack    string `json:"panic_stack,omitempty"`
-	UpstreamBytes int64  `json:"uplink_bytes,omitempty"`
+	ID           string   `json:"id"`
+	Type         string   `json:"error_type,omitempty"`
+	ErrorMsg     string   `json:"error_message,omitempty"`
+	Time         string   `json:"time"`
+	PanicStack    string   `json:"panic_stack,omitempty"`
+	UpstreamBytes int64    `json:"uplink_bytes,omitempty"`
 }
 
 // WriteError logs an error event to a dedicated error log file.
@@ -169,6 +168,7 @@ func (l *Logger) WriteStreamChunks(chunks []*StreamChunk) error {
 	}
 	return nil
 }
+
 // WriteJournal writes multiple JSONL records to a single journal file,
 // reducing per-request file-open overhead. Each record is written on its own line.
 func (l *Logger) WriteJournal(records []any) error {
@@ -189,3 +189,4 @@ func (l *Logger) WriteJournal(records []any) error {
 	}
 	return nil
 }
+
