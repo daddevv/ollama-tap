@@ -1,0 +1,17 @@
+[Unit]
+Description=Ollama Tap Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama-tap \
+  --listen 0.0.0.0:11435 \
+  --upstream http://192.168.0.13:11434 \
+  --log-dir /var/log/ollama-tap
+Restart=always
+RestartSec=3
+User=ollama-tap
+Group=ollama-tap
+
+[Install]
+WantedBy=multi-user.target
