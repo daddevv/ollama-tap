@@ -1,18 +1,18 @@
-# Ollama Tap Proxy implementation spec
+# ollama-tap implementation spec
 
-## Project name
+## Purpose
 
-`ollama-tap`
+`ollama-tap` is a transparent HTTP proxy that sits between a client such as Codex and an Ollama server.
 
-A transparent HTTP proxy for observing Codex/Ollama traffic without changing request or response behavior.
-
-Primary flow:
+Primary path:
 
 ```text
-Codex -> ollama-tap -> Ollama
+client -> ollama-tap -> Ollama
 ```
 
-Example:
+The proxy must preserve request and response behavior closely enough that a client already working against Ollama continues to work when pointed at `ollama-tap`, while the proxy records request/response metadata and best-effort generation statistics.
+
+Example client config:
 
 ```toml
 [model_providers.ollama_tap]
@@ -22,163 +22,102 @@ wire_api = "responses"
 stream_idle_timeout_ms = 600000
 ```
 
-`ollama-tap` forwards to:
+Example upstream:
 
 ```text
 http://192.168.0.13:11434
 ```
 
-## Goals
+## Definition of done
 
-The proxy must:
+The implementation is complete when all of the following are true:
 
-* Forward OpenAI-compatible Ollama requests:
+1. A client can switch its base URL from Ollama to `ollama-tap` without changing request payloads or expected response schemas.
+2. The proxy forwards both native `/api/*` and OpenAI-compatible `/v1/*` traffic without buffering streaming responses until completion.
+3. The proxy records enough data to answer which request ran, which model it targeted, whether it streamed, how long it took, how many bytes moved, and what usage or timing fields Ollama returned.
+4. The proxy exposes local health and in-memory counters.
+5. The repository includes code, tests, a README, a smoke-test script, a Dockerfile, Docker Compose, and a systemd unit.
+6. `go test ./...` passes and the manual smoke tests in this document pass against a real Ollama server.
 
+## Assumptions and constraints
+
+* Language: Go 1.22+.
+* Deployment: single binary, Linux-friendly, Docker and systemd friendly.
+* Network model: trusted LAN or VPN only for v1.
+* Upstream model: one configured Ollama server.
+* Minimum upstream compatibility for `/v1/responses`: Ollama `0.13.3+`.
+* The proxy does not emulate unsupported Ollama endpoints. If upstream lacks an endpoint, the proxy returns the upstream result unchanged.
+* No request or response mutation in v1.
+* No authentication, ACLs, or multitenancy in v1.
+
+## Non-goals for v1
+
+Do not implement any of the following in v1:
+
+* model routing
+* load balancing
+* API key management
+* schema transformation
+* prompt or response mutation
+* token-perfect counting when upstream does not provide usage
+* a web UI
+* database storage
+* OpenTelemetry, Langfuse, or external tracing backends
+
+## Transparent proxy contract
+
+The most important rule is simple:
+
+If direct Ollama works, the same client should work through `ollama-tap`.
+
+When there is a tradeoff between richer observability and transport transparency, choose transport transparency.
+
+### Path routing
+
+* Reserve `/_tap/*` for internal proxy endpoints.
+* Forward every other request path to the configured Ollama upstream unchanged.
+* Do not maintain a brittle allow-list of proxied paths. The proxy should work for current and future Ollama endpoints.
+
+Known important paths that must work in tests:
+
+* OpenAI-compatible:
   * `/v1/responses`
   * `/v1/chat/completions`
   * `/v1/completions`
   * `/v1/models`
+  * `/v1/models/{model}`
   * `/v1/embeddings`
-* Forward native Ollama API requests:
-
+* Native Ollama:
   * `/api/chat`
   * `/api/generate`
   * `/api/tags`
   * `/api/show`
+  * `/api/embed`
   * `/api/embeddings`
-* Preserve streaming behavior exactly enough for Codex to keep working.
-* Log requests and responses to JSONL files.
-* Capture streaming chunks incrementally.
-* Record basic metrics:
+  * `/api/version`
+  * `/api/ps`
 
-  * method
-  * path
-  * model if detectable
-  * status code
-  * duration
-  * request byte count
-  * response byte count
-  * stream chunk count
-  * error if any
-* Avoid modifying schemas, headers, chunks, or response format unless explicitly configured.
-* Be safe for local LAN use.
+Experimental endpoints such as image generation should still proxy transparently even if semantic stats extraction for them is minimal.
 
-## Non-goals for v1
+### URL handling
 
-Do not implement:
+For proxied requests:
 
-* Model routing
-* Load balancing
-* API-key management
-* Request mutation
-* Response mutation
-* Token-perfect counting
-* Web UI
-* Database storage
-* Semantic tracing
-* Langfuse/OpenTelemetry integration
+* Replace only scheme, host, and base authority with the upstream value.
+* Preserve request method exactly.
+* Preserve `URL.Path`, `URL.RawPath`, and `URL.RawQuery` exactly.
+* Do not normalize slashes.
+* Do not re-encode query strings beyond what Go already requires for the original request object.
 
-Those can come later. The MVP is a stable transparent recorder.
+### Header handling
 
-## Recommended stack
+Copy request and response headers as transparently as possible.
 
-Use Go.
+Rules:
 
-Why Go:
-
-* good HTTP streaming support
-* easy single binary
-* no Python async/proxy weirdness
-* fits your existing preferences
-* easy systemd/Docker deployment
-
-Target Go version: `1.22+`.
-
-## CLI/config
-
-The service should support env vars and flags.
-
-Environment variables:
-
-```bash
-OLLAMA_TAP_LISTEN_ADDR=0.0.0.0:11435
-OLLAMA_TAP_UPSTREAM=http://192.168.0.13:11434
-OLLAMA_TAP_LOG_DIR=/var/log/ollama-tap
-OLLAMA_TAP_MAX_CAPTURE_BYTES=10485760
-OLLAMA_TAP_CAPTURE_RESPONSE=true
-OLLAMA_TAP_CAPTURE_STREAM_CHUNKS=true
-OLLAMA_TAP_REDACT_AUTH=true
-OLLAMA_TAP_TIMEOUT_SECONDS=0
-```
-
-Equivalent flags:
-
-```bash
-ollama-tap \
-  --listen 0.0.0.0:11435 \
-  --upstream http://192.168.0.13:11434 \
-  --log-dir ./logs
-```
-
-Important: default timeout should be disabled or very high, because Codex tool loops and local models can sit for a long time.
-
-## Repo structure
-
-```text
-ollama-tap/
-  README.md
-  go.mod
-  cmd/
-    ollama-tap/
-      main.go
-  internal/
-    config/
-      config.go
-    proxy/
-      handler.go
-      capture.go
-      headers.go
-    logstore/
-      jsonl.go
-      sanitize.go
-    observability/
-      summary.go
-  scripts/
-    curl-smoke.sh
-  deploy/
-    docker-compose.yaml
-    ollama-tap.service
-```
-
-## Proxy behavior
-
-### Request handling
-
-For every incoming request:
-
-1. Generate a request ID.
-2. Read the request body into memory up to `max_capture_bytes`.
-3. If body exceeds limit:
-
-   * forward full body if possible
-   * log only the first `max_capture_bytes`
-   * mark `request_truncated: true`
-4. Create a new outbound request to upstream:
-
-   * same method
-   * same path and query
-   * same body
-5. Copy headers, except hop-by-hop headers.
-6. Optionally redact auth headers in logs only.
-7. Send request to upstream.
-8. Copy upstream response status and headers back to client.
-9. Stream response body to client while also recording chunks.
-10. Flush after each copied chunk if `ResponseWriter` supports `http.Flusher`.
-11. Write a final summary JSONL record.
-
-### Hop-by-hop headers to skip
-
-Do not forward these directly:
+* Strip hop-by-hop headers in both directions.
+* Also strip any header tokens named by the inbound `Connection` header.
+* Do not forward these directly:
 
 ```text
 Connection
@@ -191,243 +130,613 @@ Transfer-Encoding
 Upgrade
 ```
 
-Let Go manage transfer encoding.
+* Let Go manage transfer encoding and chunked framing.
+* Preserve end-to-end headers such as `Content-Type`, `Accept`, `Accept-Encoding`, `Cache-Control`, `ETag`, and `Authorization`.
+* Redaction applies only to logs, never to forwarded traffic.
+* Set outbound `Host` to the upstream host.
+* Append or set these forwarding headers:
+  * `X-Forwarded-For`
+  * `X-Forwarded-Host`
+  * `X-Forwarded-Proto`
 
-### Streaming requirements
+### Timeout policy
 
-This is the most important part.
+Do not impose an end-to-end request timeout in v1.
 
-The proxy must not wait for the full response before sending data to Codex.
+Long local generations and Codex tool loops must be allowed to run for a long time.
 
-Implementation hint:
+Use low-level transport and server timeouts instead of a total request timeout:
 
-```go
-buf := make([]byte, 32*1024)
+* `http.Server.ReadHeaderTimeout = 10s`
+* `http.Server.ReadTimeout = 0`
+* `http.Server.WriteTimeout = 0`
+* `http.Server.IdleTimeout = 120s`
+* transport dial timeout `10s`
+* transport TLS handshake timeout `10s`
+* transport response header timeout `0`
+* transport expect-continue timeout `1s`
+* transport idle connection timeout `90s`
 
-for {
-    n, readErr := upstreamResp.Body.Read(buf)
-    if n > 0 {
-        chunk := buf[:n]
+Also set `Transport.DisableCompression = true` so the proxy forwards upstream bytes as-is and does not transparently gunzip responses before logging or forwarding them.
 
-        // Write to client immediately.
-        _, writeErr := w.Write(chunk)
+### Cancellation behavior
 
-        // Flush immediately.
-        if flusher, ok := w.(http.Flusher); ok {
-            flusher.Flush()
-        }
+* If the client disconnects, cancel the upstream request context immediately.
+* If the upstream request fails before any response headers are written, return `502 Bad Gateway`.
+* If the upstream fails after headers have already been sent, do not try to rewrite the status code. Record the stream failure in logs and stop forwarding.
+* If logging fails, do not fail the proxied request. Record the internal failure to stderr and in runtime counters if possible.
 
-        // Log chunk asynchronously or cheaply.
-        capture.RecordResponseChunk(chunk)
-    }
+## Recommended implementation approach
 
-    if readErr == io.EOF {
-        break
-    }
+Implement the proxy manually with `net/http` rather than delegating everything to `httputil.ReverseProxy`.
 
-    if readErr != nil {
-        // log stream error
-        break
-    }
-}
+Reason:
+
+* explicit control over request body replay
+* explicit per-chunk flushing
+* explicit byte counting
+* explicit side-channel parsing for NDJSON and SSE
+* simpler reasoning about what is and is not mutated
+
+The core runtime should use:
+
+* one `http.Server`
+* one shared `http.Client` with a custom `http.Transport`
+* one events log writer goroutine
+* one chunk log writer goroutine
+* concurrency-safe in-memory counters
+
+## Required repository layout
+
+Create the repository with this shape:
+
+```text
+ollama-tap/
+  README.md
+  go.mod
+  go.sum
+  Dockerfile
+  cmd/
+    ollama-tap/
+      main.go
+  internal/
+    config/
+      config.go
+      config_test.go
+    internalapi/
+      handler.go
+    logstore/
+      jsonl.go
+      rotate.go
+    capture/
+      request.go
+      response.go
+      ndjson.go
+      sse.go
+      truncbuf.go
+      truncbuf_test.go
+    modeldetect/
+      model.go
+      model_test.go
+    proxy/
+      handler.go
+      headers.go
+      bodybuffer.go
+      headers_test.go
+      handler_test.go
+    stats/
+      runtime.go
+  scripts/
+    curl-smoke.sh
+  deploy/
+    docker-compose.yaml
+    ollama-tap.service
 ```
 
-Do not parse SSE during forwarding. Parsing can be added as a side-channel later, but raw bytes must be forwarded as-is.
+Package responsibilities:
 
-## Log files
+* `config`: flags, env vars, defaults, validation
+* `internalapi`: `/_tap/*` handlers
+* `logstore`: JSONL append and daily UTC rotation
+* `capture`: bounded body capture, NDJSON parsing, SSE parsing, text or base64 preview helpers
+* `modeldetect`: best-effort model extraction from request metadata
+* `proxy`: request duplication, upstream forwarding, response streaming, summary finalization
+* `stats`: process-level counters and snapshots
 
-Use JSONL because it is easy to inspect, grep, stream, and later import.
+## Runtime configuration
 
-Suggested files:
+Support both flags and environment variables. Precedence is:
+
+1. explicit flags
+2. environment variables
+3. built-in defaults
+
+Required config surface:
+
+```bash
+OLLAMA_TAP_LISTEN_ADDR=0.0.0.0:11435
+OLLAMA_TAP_UPSTREAM=http://192.168.0.13:11434
+OLLAMA_TAP_LOG_DIR=./logs
+OLLAMA_TAP_CAPTURE_REQUESTS=true
+OLLAMA_TAP_CAPTURE_RESPONSES=true
+OLLAMA_TAP_CAPTURE_STREAM_CHUNKS=true
+OLLAMA_TAP_MAX_REQUEST_CAPTURE_BYTES=1048576
+OLLAMA_TAP_MAX_RESPONSE_CAPTURE_BYTES=1048576
+OLLAMA_TAP_MAX_CHUNK_CAPTURE_BYTES=4096
+OLLAMA_TAP_REQUEST_SPOOL_THRESHOLD_BYTES=8388608
+OLLAMA_TAP_REDACT_HEADERS=Authorization,Cookie,X-Api-Key,X-Bf-Vk,X-Bf-Api-Key
+```
+
+Equivalent flags:
+
+```bash
+ollama-tap \
+  --listen 0.0.0.0:11435 \
+  --upstream http://192.168.0.13:11434 \
+  --log-dir ./logs \
+  --capture-requests \
+  --capture-responses \
+  --capture-stream-chunks \
+  --max-request-capture-bytes 1048576 \
+  --max-response-capture-bytes 1048576 \
+  --max-chunk-capture-bytes 4096 \
+  --request-spool-threshold-bytes 8388608
+```
+
+Config validation rules:
+
+* `upstream` is required and must be a valid `http` or `https` URL.
+* `listen` is required.
+* all byte limits must be non-negative integers.
+* `request_spool_threshold_bytes` must be greater than or equal to `max_request_capture_bytes`.
+* create the log directory if it does not exist.
+
+## Request lifecycle
+
+For every proxied request, execute these steps in order.
+
+### 1. Classify internal versus proxied request
+
+* If the path starts with `/_tap/`, serve the internal endpoint locally and do not contact upstream.
+* Otherwise continue with proxy handling.
+
+### 2. Start request summary state
+
+Create a request-scoped summary object with:
+
+* `request_id`
+* `started_at`
+* `method`
+* `path`
+* `query`
+* `client_addr`
+* `upstream`
+
+`request_id` should be a UUID. UUIDv7 is preferred if convenient, UUIDv4 is acceptable.
+
+### 3. Duplicate the request body without losing transparency
+
+This is one of the most important implementation details.
+
+Requirements:
+
+* The full request body must be forwarded upstream.
+* Logging capture limits must not truncate what is forwarded.
+* Large request bodies must not force the proxy to keep everything in memory.
+
+Implementation rules:
+
+* If there is no request body, use `nil`.
+* If `Content-Length` is known and less than or equal to `request_spool_threshold_bytes`, read the full body into memory.
+* If `Content-Length` is unknown or larger than `request_spool_threshold_bytes`, stream the body into a temp file while also copying the first `max_request_capture_bytes` bytes into a bounded capture buffer.
+* After duplication, the outbound request body must replay the full captured payload from memory or from the temp file.
+* Delete any temp file after request completion.
+* Do not reject large bodies solely because logging capture is bounded.
+
+What to record from the request body:
+
+* total request byte count
+* first `max_request_capture_bytes` bytes
+* whether capture was truncated
+
+### 4. Build the outbound request
+
+Create the upstream request with `http.NewRequestWithContext` using the duplicated body reader.
+
+Copy:
+
+* method
+* path
+* raw query
+* content length when known
+* all end-to-end headers
+
+Set:
+
+* `req.URL.Scheme` to upstream scheme
+* `req.URL.Host` to upstream host
+* `req.Host` to upstream host
+
+### 5. Detect request metadata for logging
+
+Before sending upstream, perform best-effort request inspection.
+
+Record:
+
+* `model`
+* `stream`
+* `request_content_type`
+
+Detection rules:
+
+* If request body is JSON and has a top-level string field `model`, use it.
+* For `GET /v1/models/{model}`, derive `model` from the final path segment.
+* For OpenAI and native Ollama JSON endpoints, inspect the top-level `stream` field when present.
+* For `/api/chat` and `/api/generate`, if `stream` is omitted, treat it as `true` for summary classification because Ollama streams by default.
+* If model is not detectable, store an empty string.
+
+### 6. Dispatch upstream request
+
+Use the shared `http.Client` and configured transport.
+
+If this step fails before response headers are available:
+
+* return `502 Bad Gateway`
+* write a summary record with `status = 0`
+* write `error` with the upstream failure string
+
+## Response lifecycle
+
+### 1. Copy response status and headers
+
+When the upstream response arrives:
+
+* record `status`
+* record `response_content_type`
+* copy upstream response headers to the client after stripping hop-by-hop headers
+* call `WriteHeader` once before streaming the body
+
+### 2. Stream the response body to the client immediately
+
+Do not wait for the full response body before sending bytes downstream.
+
+Use a manual loop with a fixed buffer, for example `32 KiB`.
+
+Required behavior:
+
+* read a chunk from upstream
+* write that chunk to the client immediately
+* if the writer supports `http.Flusher`, call `Flush()` after every successful write
+* count raw response bytes
+* increment raw response chunk count for each successful write
+* mirror the same bytes into capture and semantic parsing side channels
+
+The side channels must never mutate the forwarded bytes.
+
+### 3. Track timing
+
+Record:
+
+* `first_response_byte_at` when the first body bytes are successfully written to the client
+* `ended_at` when streaming completes or fails
+* `duration_ms = ended_at - started_at`
+* `ttfb_ms = first_response_byte_at - started_at` when available
+
+### 4. Handle special response cases
+
+* For `HEAD`, `204`, and `304`, do not attempt body streaming.
+* If the client write fails, stop copying, cancel the upstream context, and mark `client_canceled = true` if appropriate.
+* If the upstream read fails after partial streaming, record `completed = false` and store the read error string in the summary.
+
+## Streaming classification and semantic parsing
+
+The proxy forwards raw bytes first and parses only as a side effect.
+
+Never let parsing success or failure affect proxy correctness.
+
+### Stream kinds
+
+Classify responses into one of these values for the summary record:
+
+* `json`
+* `ndjson`
+* `sse`
+* `other`
+
+Classification rules:
+
+* if `Content-Type` starts with `text/event-stream`, use `sse`
+* else if path is `/api/chat` or `/api/generate` and request is classified as streaming, use `ndjson`
+* else if `Content-Type` contains `application/json`, use `json`
+* else use `other`
+
+### Native Ollama streaming parser
+
+For `/api/chat` and `/api/generate`, Ollama streams newline-delimited JSON objects and the final object includes timing stats.
+
+Parser requirements:
+
+* accumulate bytes until newline boundaries
+* ignore empty lines
+* parse each full line as a JSON object
+* do not assume chunk boundaries align with JSON object boundaries
+* only the final object with `done = true` contributes summary timing fields
+
+Extract when present:
+
+* `done`
+* `done_reason`
+* `total_duration`
+* `load_duration`
+* `prompt_eval_count`
+* `prompt_eval_duration`
+* `eval_count`
+* `eval_duration`
+
+For `/api/chat`, if a `message.tool_calls` array appears, keep forwarding unchanged. Tool call extraction is optional for v1 and should not block implementation.
+
+### OpenAI-compatible streaming parser
+
+For `/v1/chat/completions`, `/v1/completions`, and `/v1/responses`, Ollama streams SSE-style events when streaming is enabled.
+
+Parser requirements:
+
+* accumulate data until a blank-line SSE frame terminator
+* join multiple `data:` lines per SSE event according to normal SSE rules
+* ignore comments and blank events
+* ignore `[DONE]`
+* parse JSON payloads on a best-effort basis
+
+Extract when present:
+
+* `id`
+* `model`
+* `usage.prompt_tokens`
+* `usage.completion_tokens`
+* `usage.total_tokens`
+
+Do not attempt to fully reconstruct assistant text in v1. The goal is stats, not a replay engine.
+
+### Non-streaming JSON parsing
+
+For non-streaming JSON responses, parse only when the full response body is available within the configured response capture limit.
+
+Use that parsed body to extract:
+
+* OpenAI `usage` fields
+* native Ollama timing fields
+* model name when present in the response
+
+If the response exceeds the capture limit or is not valid JSON, skip semantic extraction and still write normal summary metrics.
+
+## Logging and captured data
+
+Use JSONL because it is easy to append, inspect, grep, and import later.
+
+### Log files
+
+Use UTC date-based rotation and create these files:
 
 ```text
 logs/
-  requests-2026-06-18.jsonl
-  chunks-2026-06-18.jsonl
-  errors-2026-06-18.jsonl
+  events-YYYY-MM-DD.jsonl
+  chunks-YYYY-MM-DD.jsonl
 ```
+
+Events file types:
+
+* `request`
+* `response`
+* `summary`
+* `internal_error`
+
+Chunk file types:
+
+* `response_chunk`
+
+File rules:
+
+* JSONL only, one object per line
+* UTF-8 output
+* timestamps in RFC3339Nano UTC
+* directory mode `0750`
+* file mode `0640` when practical
+
+### Writer behavior
+
+The log writer must not corrupt lines under concurrency.
+
+Implementation requirements:
+
+* serialize event writes through a single goroutine per output file
+* open files in append mode
+* rotate when the UTC date changes
+* flush writes promptly enough for debugging, but do not fsync every line
+
+Backpressure policy:
+
+* request, response, and summary events are important and should be queued reliably
+* chunk events may be dropped if the chunk queue is full
+* if chunk records are dropped, increment a runtime counter and expose it in `/_tap/stats`
+* never block response streaming for a long time just to preserve chunk logs
+
+### Redaction
+
+Redact these request or response headers in logs by default:
+
+* `Authorization`
+* `Cookie`
+* `X-Api-Key`
+* `X-Bf-Vk`
+* `X-Bf-Api-Key`
+
+Redaction rules:
+
+* header matching is case-insensitive
+* redact values as `REDACTED`
+* redact in logs only, never in forwarded traffic
+* body redaction is not required in v1
+
+### Request record schema
+
+Write one request record per proxied request after request duplication succeeds.
+
+Example:
+
+```json
+{
+  "type": "request",
+  "request_id": "018ff6da-...",
+  "timestamp": "2026-06-18T22:14:03.123456789Z",
+  "method": "POST",
+  "path": "/v1/responses",
+  "query": "",
+  "headers": {
+    "content-type": ["application/json"],
+    "authorization": ["REDACTED"]
+  },
+  "content_type": "application/json",
+  "model": "qwen3.6:latest",
+  "stream": true,
+  "body_json": {
+    "model": "qwen3.6:latest",
+    "input": "..."
+  },
+  "body_text": null,
+  "body_base64": null,
+  "captured_bytes": 39211,
+  "truncated": false
+}
+```
+
+Encoding rules:
+
+* lower-case header names in logs for stable output
+* if body preview is valid JSON, populate `body_json`
+* else if preview is valid UTF-8 text, populate `body_text`
+* else populate `body_base64`
+* only one of `body_json`, `body_text`, or `body_base64` should be non-null
+
+### Response record schema
+
+Write one response preview record per proxied request after the response completes or fails.
+
+This record stores only the first `max_response_capture_bytes` bytes of the full response body, not the entire body.
+
+Example:
+
+```json
+{
+  "type": "response",
+  "request_id": "018ff6da-...",
+  "timestamp": "2026-06-18T22:14:17.991234567Z",
+  "status": 200,
+  "headers": {
+    "content-type": ["text/event-stream"]
+  },
+  "content_type": "text/event-stream",
+  "body_json": null,
+  "body_text": "data: {...}\n\n",
+  "body_base64": null,
+  "captured_bytes": 4096,
+  "truncated": true
+}
+```
+
+### Chunk record schema
+
+If `capture_stream_chunks` is enabled and the response is classified as streaming, write a chunk record for each chunk successfully written to the client.
+
+Example:
+
+```json
+{
+  "type": "response_chunk",
+  "request_id": "018ff6da-...",
+  "timestamp": "2026-06-18T22:14:04.551234567Z",
+  "index": 12,
+  "bytes": 821,
+  "capture_text": "data: {...}\n\n",
+  "capture_base64": null,
+  "captured_bytes": 821,
+  "truncated": false
+}
+```
+
+Chunk capture rules:
+
+* capture at most `max_chunk_capture_bytes` bytes per chunk record
+* if preview is valid UTF-8, use `capture_text`
+* otherwise use `capture_base64`
+* do not parse chunk boundaries semantically for logging; record the raw bytes that were written
 
 ### Summary record schema
 
-Each completed request writes one summary record:
+Write exactly one summary record per proxied request, even when the request fails.
+
+Example:
 
 ```json
 {
   "type": "summary",
   "request_id": "018ff6da-...",
-  "started_at": "2026-06-18T22:14:03.123Z",
-  "ended_at": "2026-06-18T22:14:17.991Z",
+  "started_at": "2026-06-18T22:14:03.123456789Z",
+  "first_response_byte_at": "2026-06-18T22:14:03.345678901Z",
+  "ended_at": "2026-06-18T22:14:17.991234567Z",
   "duration_ms": 14868,
+  "ttfb_ms": 222,
   "method": "POST",
-  "path": "/v1/responses",
+  "path": "/api/chat",
   "query": "",
   "client_addr": "192.168.0.42:58122",
   "upstream": "http://192.168.0.13:11434",
   "status": 200,
   "model": "qwen3.6:latest",
   "stream": true,
+  "stream_kind": "ndjson",
   "request_bytes": 39211,
   "response_bytes": 184532,
   "response_chunks": 244,
-  "request_truncated": false,
-  "response_truncated": false,
+  "request_capture_truncated": false,
+  "response_capture_truncated": true,
+  "prompt_eval_count": 1234,
+  "eval_count": 567,
+  "total_duration_ns": 1234567890,
+  "load_duration_ns": 123456789,
+  "prompt_eval_duration_ns": 234567890,
+  "eval_duration_ns": 345678901,
+  "usage": null,
+  "done": true,
+  "done_reason": "stop",
+  "completed": true,
+  "client_canceled": false,
   "error": ""
 }
 ```
 
-### Request capture schema
+Required summary fields:
 
-```json
-{
-  "type": "request",
-  "request_id": "018ff6da-...",
-  "timestamp": "2026-06-18T22:14:03.123Z",
-  "method": "POST",
-  "path": "/v1/responses",
-  "headers": {
-    "content-type": ["application/json"],
-    "authorization": ["REDACTED"]
-  },
-  "body_json": {
-    "model": "qwen3.6:latest",
-    "input": "..."
-  },
-  "body_raw": null,
-  "truncated": false
-}
-```
+* request identity and timing
+* HTTP method, path, query, status
+* client address and upstream address
+* model and stream classification
+* request and response byte counts
+* raw response chunk count
+* capture truncation flags
+* native Ollama timing fields when available
+* OpenAI `usage` object when available
+* completion state and error string
 
-If JSON parsing fails, store `body_raw` as a string.
+If a field is unknown, use the zero value that keeps the schema stable:
 
-### Chunk capture schema
+* empty string for missing strings
+* `0` for missing integer counters
+* `false` for missing booleans
+* `null` for missing `usage`
 
-For streaming, write chunk records:
+## Health and local stats endpoints
 
-```json
-{
-  "type": "response_chunk",
-  "request_id": "018ff6da-...",
-  "timestamp": "2026-06-18T22:14:04.551Z",
-  "index": 12,
-  "bytes": 821,
-  "text": "data: {...}\n\n",
-  "truncated": false
-}
-```
-
-For binary or invalid UTF-8, use base64:
-
-```json
-{
-  "type": "response_chunk",
-  "encoding": "base64",
-  "data": "..."
-}
-```
-
-For v1, it is okay to log text chunks only when valid UTF-8.
-
-## Model detection
-
-Try to detect model from JSON request body.
-
-Supported shapes:
-
-### OpenAI Responses
-
-```json
-{
-  "model": "qwen3.6:latest",
-  "input": "..."
-}
-```
-
-### Chat Completions
-
-```json
-{
-  "model": "qwen3.6:latest",
-  "messages": []
-}
-```
-
-### Ollama native
-
-```json
-{
-  "model": "qwen3.6:latest",
-  "messages": []
-}
-```
-
-If missing, set:
-
-```json
-"model": ""
-```
-
-## Token tracking
-
-For v1, do not promise exact token counting.
-
-Record these when present in upstream response JSON:
-
-```json
-{
-  "prompt_eval_count": 1234,
-  "eval_count": 567,
-  "total_duration": 1234567890,
-  "prompt_eval_duration": 123456789,
-  "eval_duration": 987654321
-}
-```
-
-These usually appear in native Ollama `/api/chat` and `/api/generate` final records.
-
-For OpenAI-compatible `/v1/*`, record `usage` if present:
-
-```json
-{
-  "usage": {
-    "prompt_tokens": 1234,
-    "completion_tokens": 567,
-    "total_tokens": 1801
-  }
-}
-```
-
-If neither exists, leave token fields null.
-
-Later enhancement: add approximate token estimation, but keep it clearly labeled:
-
-```json
-"estimated_input_tokens": 1234,
-"estimated_output_tokens": 567,
-"token_estimate_method": "chars_div_4"
-```
-
-## Redaction
-
-Default behavior:
-
-* redact `Authorization`
-* redact `Cookie`
-* redact `X-Api-Key`
-* redact `X-Bf-Vk`
-* redact `X-Bf-Api-Key`
-
-Optional future redaction:
-
-```bash
-OLLAMA_TAP_REDACT_BODY=false
-OLLAMA_TAP_REDACT_PATTERNS='["sk-[a-zA-Z0-9]+","ghp_[a-zA-Z0-9]+"]'
-```
-
-For your local debugging, I’d keep body logging enabled, but do not expose this service outside trusted LAN/VPN.
-
-## Health endpoints
-
-Add local proxy health endpoints:
+Expose these internal endpoints:
 
 ```text
 GET /_tap/health
@@ -435,35 +744,244 @@ GET /_tap/config
 GET /_tap/stats
 ```
 
-### `/_tap/health`
+### `GET /_tap/health`
 
-Returns:
+This is a proxy self-health endpoint only. It does not need to call upstream.
+
+Example response:
 
 ```json
 {
   "ok": true,
+  "started_at": "2026-06-18T22:00:00Z",
   "upstream": "http://192.168.0.13:11434"
 }
 ```
 
-Optional: call upstream `/api/tags` and include upstream health.
+### `GET /_tap/config`
 
-### `/_tap/stats`
+Return sanitized effective config.
 
-In-memory counters since startup:
+Rules:
+
+* include effective listen address, upstream URL, log dir, capture flags, and byte limits
+* do not include unredacted secrets if more config is added later
+
+### `GET /_tap/stats`
+
+Return in-memory counters since process start.
+
+Example:
 
 ```json
 {
   "started_at": "2026-06-18T22:00:00Z",
+  "upstream": "http://192.168.0.13:11434",
   "requests_total": 42,
   "requests_active": 1,
-  "errors_total": 0,
+  "requests_completed": 41,
+  "requests_failed": 1,
+  "client_canceled": 0,
   "bytes_in": 123456,
-  "bytes_out": 987654
+  "bytes_out": 987654,
+  "chunk_records_written": 244,
+  "chunk_records_dropped": 0,
+  "event_log_write_errors": 0
 }
 ```
 
-## Docker Compose
+Use atomics or another concurrency-safe approach.
+
+## Build and process behavior
+
+The binary should:
+
+* load config
+* initialize logging and counters
+* build the upstream HTTP client
+* register `/_tap/*` routes plus a catch-all proxy handler
+* serve until interrupted
+* shut down gracefully on `SIGINT` or `SIGTERM`
+
+Graceful shutdown requirements:
+
+* stop accepting new requests
+* give active requests a short drain window, for example `5s`
+* close log writers cleanly
+
+## Required tests
+
+Add automated tests. This repo is greenfield, so tests are part of the implementation, not an optional follow-up.
+
+### Unit tests
+
+At minimum, add unit tests for:
+
+* config parsing and precedence
+* header stripping and forwarding header injection
+* bounded capture buffer truncation behavior
+* model detection from request bodies and `/v1/models/{model}` paths
+* native NDJSON parser with split object boundaries across reads
+* SSE parser with split frame boundaries across reads
+
+### Integration tests
+
+Use `httptest.Server` to simulate an Ollama upstream and verify end-to-end behavior.
+
+Required integration scenarios:
+
+1. `GET /api/tags` is forwarded and the response body is preserved.
+2. `GET /v1/models` is forwarded and the response body is preserved.
+3. `POST /api/chat` streaming NDJSON reaches the client incrementally rather than after upstream completion.
+4. `POST /v1/chat/completions` streaming SSE reaches the client incrementally.
+5. `POST /v1/responses` non-streaming JSON forwards unchanged and usage extraction works when present.
+6. large request bodies spill to temp file and are still forwarded exactly.
+7. hop-by-hop headers are stripped and `X-Forwarded-*` headers are set.
+8. gzip or other content encoding is preserved because the proxy does not auto-decompress.
+9. client cancellation cancels the upstream request context.
+10. `/_tap/health` and `/_tap/stats` are served locally and never forwarded upstream.
+
+For the streaming tests, deliberately delay the upstream between chunks and assert that the client sees early bytes before the upstream sends the final chunk.
+
+## Manual smoke tests
+
+Add `scripts/curl-smoke.sh` that runs the following checks against a real upstream.
+
+### 1. Proxy health
+
+```bash
+curl http://localhost:11435/_tap/health
+```
+
+Expected:
+
+* HTTP 200
+* JSON with `ok: true`
+
+### 2. Native Ollama version
+
+```bash
+curl http://localhost:11435/api/version
+```
+
+Expected:
+
+* same JSON behavior as direct upstream
+
+### 3. Native Ollama tags
+
+```bash
+curl http://localhost:11435/api/tags
+```
+
+Expected:
+
+* same body and status as direct upstream
+
+### 4. OpenAI-compatible models
+
+```bash
+curl http://localhost:11435/v1/models
+```
+
+Expected:
+
+* same behavior as direct upstream
+
+### 5. Non-streaming OpenAI chat completion
+
+```bash
+curl -X POST http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.6:latest",
+    "messages": [
+      {"role": "user", "content": "Say hello in one sentence."}
+    ],
+    "stream": false
+  }'
+```
+
+Expected:
+
+* valid model response
+* request record written
+* response preview written
+* summary record written
+
+### 6. Streaming OpenAI chat completion
+
+```bash
+curl -N -X POST http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.6:latest",
+    "messages": [
+      {"role": "user", "content": "Count from 1 to 20 slowly."}
+    ],
+    "stream": true
+  }'
+```
+
+Expected:
+
+* chunks appear progressively
+* no buffering until completion
+* chunk records are written incrementally
+
+### 7. Native Ollama chat streaming
+
+```bash
+curl -N -X POST http://localhost:11435/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.6:latest",
+    "messages": [
+      {"role": "user", "content": "Count from 1 to 20 slowly."}
+    ]
+  }'
+```
+
+Expected:
+
+* newline-delimited JSON objects arrive progressively
+* final summary includes Ollama timing fields when upstream provides them
+
+### 8. Codex smoke test
+
+Point Codex to `ollama-tap`, then ask it to run:
+
+```text
+list files and tell me what repo this is
+```
+
+Expected:
+
+* Codex still behaves normally through the proxy
+* logs show the full request and response sequence
+
+## README requirements
+
+The generated README should include:
+
+* what `ollama-tap` is
+* why it exists
+* quickstart commands
+* required environment variables
+* an example Codex config
+* where logs go
+* what `/_tap/*` endpoints exist
+* how to run tests
+
+## Docker and systemd deliverables
+
+### Dockerfile
+
+Create a minimal production Dockerfile that builds a static Go binary and runs it as the container entrypoint.
+
+### Docker Compose
+
+Provide `deploy/docker-compose.yaml` similar to:
 
 ```yaml
 services:
@@ -479,13 +997,16 @@ services:
       OLLAMA_TAP_LISTEN_ADDR: "0.0.0.0:11435"
       OLLAMA_TAP_UPSTREAM: "http://192.168.0.13:11434"
       OLLAMA_TAP_LOG_DIR: "/logs"
-      OLLAMA_TAP_CAPTURE_RESPONSE: "true"
+      OLLAMA_TAP_CAPTURE_REQUESTS: "true"
+      OLLAMA_TAP_CAPTURE_RESPONSES: "true"
       OLLAMA_TAP_CAPTURE_STREAM_CHUNKS: "true"
     volumes:
       - ./logs:/logs
 ```
 
-## Systemd service
+### systemd unit
+
+Provide `deploy/ollama-tap.service` similar to:
 
 ```ini
 [Unit]
@@ -507,7 +1028,9 @@ Group=ollama-tap
 WantedBy=multi-user.target
 ```
 
-## Codex config example
+## Example Codex config
+
+If Codex is using the OpenAI-compatible responses API:
 
 ```toml
 model = "qwen3.6:latest"
@@ -522,137 +1045,25 @@ wire_api = "responses"
 stream_idle_timeout_ms = 600000
 ```
 
-If Codex previously worked with direct Ollama without `/v1`, mirror that exact shape and only swap the host/port:
+If Codex previously worked against Ollama without `/v1`, keep the same path shape and change only host and port:
 
 ```toml
 base_url = "http://192.168.0.55:11435"
 ```
 
-## MVP acceptance tests
+## Implementation order
 
-### 1. Health
+Implement in this order:
 
-```bash
-curl http://localhost:11435/_tap/health
-```
+1. config loading, HTTP server startup, internal endpoints, and runtime counters
+2. manual proxy path with request duplication, header copying, and raw response streaming
+3. JSONL event logging and summary records
+4. request and response preview capture
+5. native NDJSON and OpenAI SSE semantic parsers for stats extraction
+6. tests, README, Dockerfile, Docker Compose, and systemd unit
 
-Expected: JSON with `ok: true`.
+## Final engineering rule
 
-### 2. Native Ollama tags
+The proxy should be boring.
 
-```bash
-curl http://localhost:11435/api/tags
-```
-
-Expected: same output as:
-
-```bash
-curl http://192.168.0.13:11434/api/tags
-```
-
-### 3. OpenAI-compatible models
-
-```bash
-curl http://localhost:11435/v1/models
-```
-
-Expected: same behavior as direct Ollama.
-
-### 4. Non-stream chat completion
-
-```bash
-curl -X POST http://localhost:11435/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "qwen3.6:latest",
-    "messages": [
-      {"role": "user", "content": "Say hello in one sentence."}
-    ],
-    "stream": false
-  }'
-```
-
-Expected:
-
-* valid model response
-* request summary logged
-* response body logged
-
-### 5. Streaming chat completion
-
-```bash
-curl -N -X POST http://localhost:11435/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "qwen3.6:latest",
-    "messages": [
-      {"role": "user", "content": "Count from 1 to 20 slowly."}
-    ],
-    "stream": true
-  }'
-```
-
-Expected:
-
-* chunks appear progressively
-* no buffering until completion
-* chunks logged incrementally
-
-### 6. Codex smoke test
-
-Point Codex to `ollama-tap`, then ask it to run a simple command:
-
-```text
-list files and tell me what repo this is
-```
-
-Expected:
-
-* Codex performs more than one tool/action if needed
-* no one-command-then-die behavior
-* logs show the full request/stream sequence
-
-## Implementation phases
-
-### Phase 1: Transparent proxy
-
-Build:
-
-* config loader
-* health endpoint
-* raw forwarding
-* streaming-safe response copying
-* basic summary logs
-
-No fancy parsing yet.
-
-### Phase 2: Capture and inspect
-
-Add:
-
-* request body JSON capture
-* response chunk JSONL capture
-* model detection
-* status/duration metrics
-
-### Phase 3: Token/usage extraction
-
-Add best-effort extraction from:
-
-* native Ollama final response records
-* OpenAI-compatible `usage` fields
-* SSE chunks if they contain usage events
-
-### Phase 4: Developer UX
-
-Add:
-
-* `ollama-tap tail`
-* `ollama-tap summarize logs/...jsonl`
-* maybe a tiny TUI or web page later
-
-## Key engineering rule
-
-If there is ever a tradeoff between “better logging” and “Codex still works,” choose “Codex still works.”
-
-The proxy should be boring enough that if direct Ollama works, tap proxy also works.
+If direct Ollama works and `ollama-tap` does not, treat that as a proxy bug unless the upstream itself is failing.
