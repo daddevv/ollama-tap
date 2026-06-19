@@ -15,37 +15,42 @@ check() {
   fi
 }
 
+# json_field -- extract a JSON field value using jq; prints "false" on failure.
+json_field() {
+  jq -r "$1" 2>/dev/null || echo "false"
+}
+
 echo "=== ollama-tap smoke tests ==="
 
 # 1. Health endpoint
-resp=$(curl -sf "$PROXY/_tap/health") &&   check "health endpoint returns {ok:true}" "$(echo "$resp" | python3 -c 'import sys,json; print("true" if json.load(sys.stdin).get("ok") else "false")')" || true
+resp=$(curl -sf "$PROXY/_tap/health") &&   check "health endpoint returns {ok:true}" "$(json_field '.ok')" || true
 
 # 2. Stats endpoint
-resp=$(curl -sf "$PROXY/_tap/stats") &&   check "stats endpoint returns json" "$(echo "$resp" | python3 -c 'import sys,json; print("true" if "total_requests" in json.load(sys.stdin) else "false")')" || true
+resp=$(curl -sf "$PROXY/_tap/stats") &&   check "stats endpoint returns json" "$(json_field 'has("total_requests")')" || true
 
 # 3. Ollama version (native)
-resp=$(curl -sf "$PROXY/api/version") &&   check "api/version proxy works" "$(echo "$resp" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if "version" in d else "false")')" || true
+resp=$(curl -sf "$PROXY/api/version") &&   check "api/version proxy works" "$(json_field 'has("version")')" || true
 
 # 4. Ollama tags
-resp=$(curl -sf "$PROXY/api/tags") &&   check "api/tags proxy works" "$(echo "$resp" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if ("models" in d or len(json.dumps(d))>10) else "false")')" || true
+resp=$(curl -sf "$PROXY/api/tags") &&   check "api/tags proxy works" "$(json_field 'has("models") or (length > 10)')" || true
 
 # 5. OpenAI models
-resp=$(curl -sf "$PROXY/v1/models") &&   check "/v1/models proxy works" "$(echo "$resp" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if "data" in d else "false")')" || true
+resp=$(curl -sf "$PROXY/v1/models") &&   check "/v1/models proxy works" "$(json_field 'has("data")')" || true
 
 # 6. OpenAI chat (non-streaming)
 resp=$(curl -sf -X POST "$PROXY/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -d '{"model":"dummy","messages":[{"role":"user","content":"hi"}],"stream":false}') &&   check "/v1/chat/completions proxy works" "$(echo "$resp" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if "id" in d else "false")')" || true
+  -d '{"model":"dummy","messages":[{"role":"user","content":"hi"}],"stream":false}') &&   check "/v1/chat/completions proxy works" "$(json_field 'has("id")')" || true
 
 # 7. Streaming chat (check headers)
 headers=$(curl -sI "$PROXY/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -d '{"model":"dummy","messages":[{"role":"user","content":"hi"}],"stream":true}') &&   check "streaming sets Content-Type header" "$(echo "$headers" | python3 -c 'import sys; print("true" if "text/event-stream" in sys.stdin.read().lower() else "false")')" || true
+  -d '{"model":"dummy","messages":[{"role":"user","content":"hi"}],"stream":true}') &&   check "streaming sets Content-Type header" "$(printf '%s\n' "$headers" | grep -qi 'text/event-stream' && echo true || echo false)" || true
 
 # 8. Native chat (NDJSON)
 resp=$(curl -sf -N -X POST "$PROXY/api/chat" \
   -H "Content-Type: application/json" \
-  -d '{"model":"dummy","messages":[{"role":"user","content":"hi"}]}') &&   check "/api/chat proxy works (stream)" "$(echo "$resp" | head -1 | python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if "model" in d else "false")')" || true
+  -d '{"model":"dummy","messages":[{"role":"user","content":"hi"}]}') &&   check "/api/chat proxy works (stream)" "$(head -1 <<<"$resp" | json_field 'has("model")')" || true
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

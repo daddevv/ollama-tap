@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"log"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -32,7 +33,8 @@ type RequestLog struct {
 	Path    string              `json:"path"`
 	URL     string              `json:"url"`
 	Headers map[string][]string `json:"headers,omitempty"`
-	Body    string              `json:"body,omitempty"`
+	Body        string `json:"body,omitempty"`
+	BodyTruncated bool `json:"body_truncated,omitempty"`
 	Time    string              `json:"time"`
 }
 
@@ -54,7 +56,8 @@ type ResponsePreview struct {
 	ID         string              `json:"id"`
 	StatusCode int                 `json:"status_code"`
 	Headers    map[string][]string `json:"headers,omitempty"`
-	Body       string              `json:"body_preview,omitempty"`
+	Body        string `json:"body_preview,omitempty"`
+	BodyTruncated bool `json:"body_truncated,omitempty"`
 	Time       string              `json:"time"`
 }
 
@@ -185,6 +188,7 @@ func (l *Logger) WriteStreamChunks(chunks []*StreamChunk) error {
 			return fmt.Errorf("marshal stream chunk: %w", err)
 		}
 		if _, err := f.Write(append(b, '\n')); err != nil {
+			log.Printf("ollama-tap: failed to write stream chunk for %s: %v", chunks[0].ID, err)
 			return err
 		}
 	}

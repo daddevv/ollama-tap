@@ -2,33 +2,51 @@
 
 A transparent HTTP proxy for Ollama that records request/response metadata and provides real-time observability.
 
-## Purpose
+## Quick Overview
 
-`ollama-tap` sits between a client (e.g. Codex CLI) and an Ollama server, forwarding all traffic unmodified while capturing:
+`ollama-tap` sits between your AI client (e.g. Codex CLI, a browser extension) and an Ollama server. It forwards every request unmodified while capturing:
 
 - Request method, path, headers, and body preview
 - Response status code, headers, and body preview
-- Streaming chunk data (NDJSON or SSE) with on-the-fly parsing for token counts and timing
+- Streaming chunks (NDJSON or SSE) with on-the-fly parsing for token counts and timing
 - Per-request summary records
 
-If direct Ollama works, the same client works through `ollama-tap`.
+If your client works with Ollama directly, it works through `ollama-tap` too. Just point it at the proxy's listen address instead of Ollama's.
+
+## Requirements
+
+### System dependencies
+
+| Tool | When needed | Install example |
+|---|---|---|
+| [Go 1.23+](https://go.dev/dl/) | Building from source | `sudo pacman -S go` (Arch Linux), `sudo apt install golang-go` (Debian/Ubuntu), `brew install go` (macOS), `choco install golang` (Windows) |
+| [curl](https://curl.se/) | Smoke tests only | Included in most OSes; `sudo pacman -S curl` (Arch Linux), `sudo apt install curl` (Debian/Ubuntu), `brew install curl` (macOS), `choco install curl` (Windows) |
+| [jq](https://jqlang.github.io/jq/) | Smoke tests only | `sudo pacman -S jq` (Arch Linux), `sudo apt install jq` (Debian/Ubuntu), `brew install jq` (macOS), `choco install jq` (Windows) |
+
+> **Note:** If you deploy via Docker or systemd (below), Go, curl, and jq are not needed at runtime.
+
+### Prerequisites
+
+You need an Ollama server running somewhere accessible on your network (or locally). This proxy does **not** start or embed Ollama — it only mirrors its traffic.
 
 ## Quickstart
 
 ```bash
-# Set environment variables
-export OLLAMA_TAP_UPSTREAM=http://192.168.0.13:11434
-export OLLAMA_TAP_LISTEN_ADDR=:11435  # default
+# Point to your Ollama server
+export OLLAMA_TAP_UPSTREAM=http://localhost:11434
 
-# Run the proxy
+# Start the proxy on :11435 (default)
 go run ./cmd/ollama-tap/
 ```
 
-Point your client at `http://localhost:11435` (or whichever listen address you configured).
+Point your client at `http://localhost:11435` instead of wherever Ollama was running before.
 
-### With capture enabled
+### Enable full capture
+
+By default no request/response data is logged. To record everything, set the capture flags before starting:
 
 ```bash
+export OLLAMA_TAP_UPSTREAM=http://localhost:11434
 export OLLAMA_TAP_LOG_DIR=/tmp/ollama-tap
 export OLLAMA_TAP_CAPTURE_REQUESTS=true
 export OLLAMA_TAP_CAPTURE_RESPONSES=true
@@ -36,7 +54,7 @@ export OLLAMA_TAP_CAPTURE_STREAM_CHUNKS=true
 go run ./cmd/ollama-tap/
 ```
 
-Logs will be written to the configured `OLLAMA_TAP_LOG_DIR` as JSONL files.
+Logged files are written to `$OLLAMA_TAP_LOG_DIR` as JSONL (one JSON object per line).
 
 ## Environment Variables
 
@@ -51,51 +69,59 @@ Logs will be written to the configured `OLLAMA_TAP_LOG_DIR` as JSONL files.
 
 ## Internal Endpoints
 
+These endpoints are accessible at the proxy's listen address for monitoring:
+
 | Endpoint | Method | Description |
 |---|---|---|
-| `/_tap/health` | GET | Health check (returns `{"ok":true}`) |
+| `/_tap/health` | GET | Health check — returns `{"ok":true}` |
 | `/_tap/stats` | GET | In-memory counters snapshot |
 
-Stats response includes:
-
-- `total_requests` — cumulative forwarded requests
-- `uptime` — proxy uptime
-- `last_request` — timestamp of last request
-- `streaming_connections` — count of streaming connections seen
-- `non_streaming_connections` — count of non-streaming connections seen
-- `active_connections` — currently active upstream connections
-- `uplink_bytes` — total bytes sent to upstream
-- `downlink_bytes` — total bytes received from upstream
-- `failed_requests` — failed upstream requests
+The `/stats` response includes: `total_requests`, `uptime`, `last_request`, `streaming_connections`, `non_streaming_connections`, `active_connections`, `uplink_bytes`, `downlink_bytes`, `failed_requests`.
 
 ## Logging Format
 
-All log files are JSONL (one JSON object per line).
+All log files are JSONL. Each field is optional (omitted when empty).
 
 ### Request logs (`request_*.jsonl`)
 
+One file per request. Example:
+
 ```json
-{"id":"1234567890","method":"POST","path":"/v1/chat/completions","url":"/v1/chat/completions","req_type":"openai_chat","headers":{"Content-Type":["application/json"]},"body_preview":"{"model":"qwen3.6:latest","messages":[...]}",
+{"id":"1234567890","method":"POST","path":"/v1/chat/completions","url":"/v1/chat/completions","req_type":"openai_chat","headers":{"Content-Type":["application/json"]},"body_preview":"{\"model\":\"qwen3.6:latest\",\"messages\":[...]}",
 ```
+
+| Field | Description |
+|---|---|
+| `id` | Unique request ID (Unix nanoseconds) |
+| `method`, `path`, `url` | HTTP method and URL path |
+| `req_type` | Classification: `openai_chat`, `ollama_native`, etc. |
+| `headers` | Request headers (snapshot) |
+| `body_preview` | First 4 KiB of the request body |
+| `body_truncated` | `true` if the captured body exceeded 1 MiB |
 
 ### Response preview (`response_*.jsonl`)
 
 ```json
-{"id":"1234567890","status_code":200,"headers":{"Content-Type":["application/json"]},"body_preview":"{"id":"chatcmpl-...","choices":[...]}",
+{"id":"1234567890","status_code":200,"headers":{"Content-Type":["application/json"]},"body_preview":"{\"id\":\"chatcmpl-...\",\"choices\":[...]}",
 ```
+
+| Field | Description |
+|---|---|
+| `id`, `status_code` | Request ID and HTTP status from Ollama |
+| `headers` | Response headers (hop-by-hop stripped) |
+| `body_preview` | First 4 KiB of the response body |
+| `body_truncated` | `true` if the captured body exceeded 1 MiB |
 
 ### Stream chunks (`chunks_*.jsonl`)
 
 ```json
-{"id":"1234567890","chunk_type":"text","model":"qwen3.6:latest","delta":"Hello","done":false,"time":"2024-..."},
-{"id":"1234567890","chunk_type":"usage","model":"qwen3.6:latest","token_count":42,"done":true,"time":"2024-..."},
+{"id":"1234567890","chunk_type":"text","model":"qwen3.6:latest","delta":"Hello","done":false,"time":"2024-..."}
+{"id":"1234567890","chunk_type":"usage","model":"qwen3.6:latest","token_count":42,"done":true,"time":"2024-..."}
 ```
 
 ### Summary (`summary_*.jsonl`)
 
-```json
-{"id":"1234567890","model":"qwen3.6:latest","req_type":"openai_chat","method":"POST","path":"/v1/chat/completions","duration_ms":3421.5,"uplink_bytes":412,"downlink_bytes":12847,"usage_prompt_tokens":10,"usage_completion_tokens":42,"usage_total_tokens":52}
-```
+One per request, written after the response finishes. Includes timing, byte counts, and token usage where available.
 
 ## Example Config (Codex)
 
@@ -117,9 +143,9 @@ name = "Ollama Tap"
 base_url = "http://192.168.0.55:11435"
 ```
 
-## Docker
+## Deploying
 
-### Build and run
+### Docker
 
 ```bash
 docker build -t ollama-tap .
@@ -135,9 +161,13 @@ docker run -d \
 
 See [`deploy/docker-compose.yaml`](deploy/docker-compose.yaml).
 
-## systemd
+### systemd
 
 See [`deploy/ollama-tap.service`](deploy/ollama-tap.service).
+
+### Graceful shutdown
+
+The proxy handles `SIGINT` and `SIGTERM`: stops accepting new requests, waits up to 30 seconds for in-flight requests to complete, then exits.
 
 ## Testing
 
@@ -147,7 +177,7 @@ Run unit tests:
 go test ./...
 ```
 
-Run smoke tests against a live proxy:
+Run smoke tests against a live proxy (requires **curl** and **jq**):
 
 ```bash
 export OLLAMA_TAP_PROXY=http://localhost:11435
@@ -158,7 +188,7 @@ bash scripts/curl-smoke.sh
 
 1. **Transparency first**: If direct Ollama works, `ollama-tap` must also work with the same client config.
 2. **Boring proxy**: No request/response mutation in v1. No model routing, auth, or schema transformation.
-3. **Low overhead**: Streaming responses are forwarded incrementally without buffering. Parsing for stats is done on-the-fly from the response stream.
+3. **Low overhead**: Streaming responses are forwarded incrementally without buffering. Parsing for stats is done on-the-fly.
 4. **Simple deployment**: Single binary, environment-variable config, systemd and Docker support.
 
 ## License

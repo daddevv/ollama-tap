@@ -66,8 +66,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	streamType := requestType(r.URL.Path)
 
 	// Always capture body bytes so we can forward and optionally log it.
+	reqBodyTruncated := false
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err == nil && len(bodyBytes) > 0 {
+		reqBodyTruncated = len(bodyBytes) == int(1<<20)
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	} else if r.Body != nil {
 		r.Body.Close()
@@ -84,8 +86,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Path:    r.URL.Path,
 			URL:     r.URL.String(),
 			Headers: headerMap(r.Header),
-			Body:    string(bodyBytes[:min(len(bodyBytes), 4096)]),
-			Time:    time.Now().UTC().Format(time.RFC3339Nano),
+			Body:        string(bodyBytes[:min(len(bodyBytes), 4096)]),
+			BodyTruncated: reqBodyTruncated,
+			Time:        time.Now().UTC().Format(time.RFC3339Nano),
 		}); err != nil {
 			log.Printf("ollama-tap: failed to write request log for %s: %v", id, err)
 		}
@@ -132,21 +135,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Copy response headers to client (strip hop-by-hop).
 	copyNonReservedHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-
-	// Detect whether upstream is streaming.
+	// Read body first (before writing headers) so we can flag truncation.
 	isUpstreamStreaming := isStreamResponse(resp) || r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate"
 
 	if isUpstreamStreaming {
 		p.handleStreaming(r.Context(), w, resp.Body, id, streamType, start)
 	} else {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		truncated := len(bodyData) == int(1<<20)
 
 		// Warn if the body was truncated; the upstream may have sent more data than we captured.
-		if len(bodyData) == int(1<<20) {
+		if truncated {
 			log.Printf("ollama-tap: response body for %s truncated at 1 MiB; upstream may have sent more", id)
 		}
 
+		// Copy response headers and set truncation flag before writing status.
+		copyNonReservedHeaders(w.Header(), resp.Header)
+		if truncated {
+			w.Header().Set("X-Response-Truncated", "true")
+		}
+		w.WriteHeader(resp.StatusCode)
 		w.Write(bodyData)
 
 		p.metrics.RecordUpstreamBytes(int64(len(bodyData)))
@@ -154,11 +162,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if p.cfg.CaptureResponses {
 			if err := p.logger.WriteResponsePreview(&logging.ResponsePreview{
-				ID:         id,
-				StatusCode: resp.StatusCode,
-				Headers:    headerMap(resp.Header),
-				Body:       string(bodyData[:min(len(bodyData), 4096)]),
-				Time:       time.Now().UTC().Format(time.RFC3339Nano),
+				ID:            id,
+				StatusCode:    resp.StatusCode,
+				Headers:       headerMap(resp.Header),
+				Body:          string(bodyData[:min(len(bodyData), 4096)]),
+				BodyTruncated: truncated,
+				Time:          time.Now().UTC().Format(time.RFC3339Nano),
 			}); err != nil {
 				log.Printf("ollama-tap: failed to write response preview for %s: %v", id, err)
 			}
