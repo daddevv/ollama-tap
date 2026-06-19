@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,6 +17,10 @@ import (
 	"github.com/daddevv/ollama-tap/internal/metrics"
 	"github.com/daddevv/ollama-tap/internal/parser"
 )
+
+// defaultResponseHeaderTimeout is the timeout for reading the upstream response header.
+// The value 4716ms was chosen empirically and should be revisited when a rationale is known.
+const defaultResponseHeaderTimeout = 15000 * time.Millisecond
 
 // streamChunkFlushThreshold controls how many chunks are buffered before writing to disk.
 const streamChunkFlushThreshold = 20
@@ -37,7 +42,7 @@ func New(cfg *config.Config, m *metrics.Metrics) (*Proxy, error) {
 			DualStack: true,
 		}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 4716 * time.Millisecond,
+		ResponseHeaderTimeout: defaultResponseHeaderTimeout,
 		DisableCompression:    false,
 	}
 
@@ -76,7 +81,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Log request metadata when capture is enabled.
 	if p.cfg.CaptureRequests && bodyBytes != nil && len(bodyBytes) > 0 {
-		p.logger.WriteRequestLog(&logging.RequestLog{
+		if err := p.logger.WriteRequestLog(&logging.RequestLog{
 			ID:      id,
 			Model:   "",
 			ReqType: streamType,
@@ -86,7 +91,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Headers: headerMap(r.Header),
 			Body:    string(bodyBytes[:min(len(bodyBytes), 4096)]),
 			Time:    time.Now().UTC().Format(time.RFC3339Nano),
-		})
+		}); err != nil {
+			log.Printf("ollama-tap: failed to write request log for %s: %v", id, err)
+		}
 	}
 
 	start := time.Now()
@@ -120,7 +127,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.metrics.RecordFailure()
 		timeNow := time.Now().UTC().Format(time.RFC3339Nano)
 		p.logger.WriteError(&logging.Error{ID: id, Type: "upstream_error", ErrorMsg: err.Error(), Time: timeNow})
-		p.logSummary(id, streamType, start, r.Method, r.URL.Path, nil, "", nil, "upstream_error")
+		if err := p.logSummary(id, streamType, start, r.Method, r.URL.Path, nil, "", nil, "upstream_error"); err != nil {
+			log.Printf("ollama-tap: failed to write summary for %s: %v", id, err)
+		}
 		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -137,22 +146,32 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleStreaming(r.Context(), w, resp.Body, id, streamType, start)
 	} else {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+		// Warn if the body was truncated; the upstream may have sent more data than we captured.
+		if len(bodyData) == int(1<<20) {
+			log.Printf("ollama-tap: response body for %s truncated at 1 MiB; upstream may have sent more", id)
+		}
+
 		w.Write(bodyData)
 
 		p.metrics.RecordUpstreamBytes(int64(len(bodyData)))
 		p.metrics.RecordClientBytes(int64(len(bodyData)))
 
 		if p.cfg.CaptureResponses {
-			p.logger.WriteResponsePreview(&logging.ResponsePreview{
+			if err := p.logger.WriteResponsePreview(&logging.ResponsePreview{
 				ID:         id,
 				StatusCode: resp.StatusCode,
 				Headers:    headerMap(resp.Header),
 				Body:       string(bodyData[:min(len(bodyData), 4096)]),
 				Time:       time.Now().UTC().Format(time.RFC3339Nano),
-			})
+			}); err != nil {
+				log.Printf("ollama-tap: failed to write response preview for %s: %v", id, err)
+			}
 		}
 
-		p.logSummary(id, streamType, start, r.Method, r.URL.Path, bodyData, "", nil, "")
+		if err := p.logSummary(id, streamType, start, r.Method, r.URL.Path, bodyData, "", nil, ""); err != nil {
+			log.Printf("ollama-tap: failed to write summary for %s: %v", id, err)
+		}
 	}
 
 	p.metrics.RecordRequest(time.Since(start), isUpstreamStreaming)
@@ -272,7 +291,9 @@ func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body
 		statsModel = p.handleSSE(ctx, body, w, flusher, id)
 	}
 
-	p.logSummary(id, streamType, start, "", "", nil, statsModel, nil, "")
+	if err := p.logSummary(id, streamType, start, "", "", nil, statsModel, nil, ""); err != nil {
+		log.Printf("ollama-tap: failed to write summary for %s: %v", id, err)
+	}
 }
 
 // handleNDJSON reads Ollama native newline-delimited JSON and streams it to the client.
@@ -418,7 +439,7 @@ func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWr
 }
 
 // logSummary writes a per-request summary record.
-func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path string, body []byte, statsModel string, usage *parser.OpenAIUsage, errType string) {
+func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path string, body []byte, statsModel string, usage *parser.OpenAIUsage, errType string) error {
 	s := &logging.Summary{
 		ID:         id,
 		Model:      statsModel,
@@ -427,7 +448,7 @@ func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path 
 		Path:       path,
 		DurationMs: time.Since(start).Seconds() * 1000,
 		Time:       time.Now().UTC().Format(time.RFC3339Nano),
-		ErrType:      errType,
+		ErrType:    errType,
 	}
 
 	if body != nil {
@@ -441,7 +462,10 @@ func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path 
 		s.UsageTotalTok = usage.TotalTokens
 	}
 
-	p.logger.WriteSummary(s)
+	if err := p.logger.WriteSummary(s); err != nil {
+		return err
+	}
+	return nil
 }
 
 func headerMap(h http.Header) map[string][]string {

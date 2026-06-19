@@ -42,7 +42,11 @@ func (l *Logger) WriteRequestLog(r *RequestLog) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(encode(r))
+	b, err := encode(r)
+	if err != nil {
+		return fmt.Errorf("marshal request log: %w", err)
+	}
+	_, err = f.Write(b)
 	return err
 }
 
@@ -60,7 +64,11 @@ func (l *Logger) WriteResponsePreview(p *ResponsePreview) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(encode(p))
+	b, err := encode(p)
+	if err != nil {
+		return fmt.Errorf("marshal response preview: %w", err)
+	}
+	_, err = f.Write(b)
 	return err
 }
 
@@ -80,7 +88,11 @@ func (l *Logger) WriteStreamChunk(c *StreamChunk) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(append(encode(c), '\n'))
+	b, err := encode(c)
+	if err != nil {
+		return fmt.Errorf("marshal stream chunk: %w", err)
+	}
+	_, err = f.Write(append(b, '\n'))
 	return err
 }
 
@@ -112,7 +124,11 @@ func (l *Logger) WriteSummary(s *Summary) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(encode(s))
+	b, err := encode(s)
+	if err != nil {
+		return fmt.Errorf("marshal summary: %w", err)
+	}
+	_, err = f.Write(b)
 	return err
 }
 
@@ -128,9 +144,8 @@ func extractStats(ollamaStats *parser.OllamaStats, usage *parser.OpenAIUsage) (i
 	return 0, 0, 0, 0, 0, 0, 0, 0, 0
 }
 
-func encode(v any) []byte {
-	b, _ := json.Marshal(v)
-	return b
+func encode(v any) ([]byte, error) {
+	return json.Marshal(v)
 }
 
 // Error represents an error or failure that occurred during request processing.
@@ -139,7 +154,6 @@ type Error struct {
 	Type         string `json:"error_type,omitempty"`
 	ErrorMsg     string `json:"error_message,omitempty"`
 	Time         string `json:"time"`
-	PanicStack    string `json:"panic_stack,omitempty"`
 	UpstreamBytes int64  `json:"uplink_bytes,omitempty"`
 }
 
@@ -150,7 +164,10 @@ func (l *Logger) WriteError(e *Error) error {
 		return err
 	}
 	defer f.Close()
-	b, _ := json.Marshal(e)
+	b, err := json.Marshal(e)
+	if err != nil {
+		return fmt.Errorf("marshal error record: %w", err)
+	}
 	_, writeErr := f.Write(append(b, '\n'))
 	return writeErr
 }
@@ -163,7 +180,11 @@ func (l *Logger) WriteStreamChunks(chunks []*StreamChunk) error {
 	}
 	defer f.Close()
 	for _, c := range chunks {
-		if _, err := f.Write(append(encode(c), '\n')); err != nil {
+		b, err := encode(c)
+		if err != nil {
+			return fmt.Errorf("marshal stream chunk: %w", err)
+		}
+		if _, err := f.Write(append(b, '\n')); err != nil {
 			return err
 		}
 	}
