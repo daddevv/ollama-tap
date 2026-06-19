@@ -139,6 +139,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isUpstreamStreaming := isStreamResponse(resp) || r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate"
 
 	if isUpstreamStreaming {
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "text/event-stream")
+		}
 		p.handleStreaming(r.Context(), w, resp.Body, id, streamType, start)
 	} else {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
