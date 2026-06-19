@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -731,8 +731,8 @@ func TestIntegrationSSEStreamForwarding(t *testing.T) {
 			if i < len(data)-1 {
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
-			}
 				}
+			}
 			time.Sleep(2 * time.Millisecond)
 		}
 	}))
@@ -1282,4 +1282,3 @@ func TestIntegrationStreamChunksLoggedToDisk(t *testing.T) {
 		}
 	}
 }
-

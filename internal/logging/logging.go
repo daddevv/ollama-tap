@@ -1,9 +1,9 @@
 package logging
 
 import (
-	"log"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,16 +26,16 @@ func RecordID() string {
 }
 
 type RequestLog struct {
-	ID      string              `json:"id"`
-	Model   string              `json:"model,omitempty"`
-	ReqType string              `json:"req_type"`
-	Method  string              `json:"method"`
-	Path    string              `json:"path"`
-	URL     string              `json:"url"`
-	Headers map[string][]string `json:"headers,omitempty"`
-	Body        string `json:"body,omitempty"`
-	BodyTruncated bool `json:"body_truncated,omitempty"`
-	Time    string              `json:"time"`
+	ID            string              `json:"id"`
+	Model         string              `json:"model,omitempty"`
+	ReqType       string              `json:"req_type"`
+	Method        string              `json:"method"`
+	Path          string              `json:"path"`
+	URL           string              `json:"url"`
+	Headers       map[string][]string `json:"headers,omitempty"`
+	Body          string              `json:"body,omitempty"`
+	BodyTruncated bool                `json:"body_truncated,omitempty"`
+	Time          string              `json:"time"`
 }
 
 func (l *Logger) WriteRequestLog(r *RequestLog) error {
@@ -53,12 +53,12 @@ func (l *Logger) WriteRequestLog(r *RequestLog) error {
 }
 
 type ResponsePreview struct {
-	ID         string              `json:"id"`
-	StatusCode int                 `json:"status_code"`
-	Headers    map[string][]string `json:"headers,omitempty"`
-	Body        string `json:"body_preview,omitempty"`
-	BodyTruncated bool `json:"body_truncated,omitempty"`
-	Time       string              `json:"time"`
+	ID            string              `json:"id"`
+	StatusCode    int                 `json:"status_code"`
+	Headers       map[string][]string `json:"headers,omitempty"`
+	Body          string              `json:"body_preview,omitempty"`
+	BodyTruncated bool                `json:"body_truncated,omitempty"`
+	Time          string              `json:"time"`
 }
 
 func (l *Logger) WriteResponsePreview(p *ResponsePreview) error {
@@ -153,10 +153,10 @@ func encode(v any) ([]byte, error) {
 
 // Error represents an error or failure that occurred during request processing.
 type Error struct {
-	ID           string `json:"id"`
-	Type         string `json:"error_type,omitempty"`
-	ErrorMsg     string `json:"error_message,omitempty"`
-	Time         string `json:"time"`
+	ID            string `json:"id"`
+	Type          string `json:"error_type,omitempty"`
+	ErrorMsg      string `json:"error_message,omitempty"`
+	Time          string `json:"time"`
 	UpstreamBytes int64  `json:"uplink_bytes,omitempty"`
 }
 
@@ -194,6 +194,7 @@ func (l *Logger) WriteStreamChunks(chunks []*StreamChunk) error {
 	}
 	return nil
 }
+
 // WriteJournal writes multiple JSONL records to a single journal file,
 // reducing per-request file-open overhead. Each record is written on its own line.
 func (l *Logger) WriteJournal(records []any) error {

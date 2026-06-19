@@ -13,6 +13,8 @@ type Metrics struct {
 	nonStreamingCount  atomic.Int64
 	activeConnections  atomic.Int64
 	failedRequests     atomic.Int64
+	truncatedResponses atomic.Int64
+	logFailures        atomic.Int64
 
 	firstSeen   time.Time
 	lastSeenSec int64 // Unix seconds, for atomic access
@@ -38,9 +40,11 @@ func (m *Metrics) RecordRequest(duration time.Duration, streaming bool) {
 func (m *Metrics) RecordUpstreamBytes(n int64) { m.totalUpstreamBytes.Add(n) }
 func (m *Metrics) RecordClientBytes(n int64)   { m.totalClientBytes.Add(n) }
 
-func (m *Metrics) IncrementActive() { m.activeConnections.Add(1) }
-func (m *Metrics) DecrementActive() { m.activeConnections.Add(-1) }
-func (m *Metrics) RecordFailure()   { m.failedRequests.Add(1) }
+func (m *Metrics) IncrementActive()  { m.activeConnections.Add(1) }
+func (m *Metrics) DecrementActive()  { m.activeConnections.Add(-1) }
+func (m *Metrics) RecordFailure()    { m.failedRequests.Add(1) }
+func (m *Metrics) RecordTruncated()  { m.truncatedResponses.Add(1) }
+func (m *Metrics) RecordLogFailure() { m.logFailures.Add(1) }
 
 type Snapshot struct {
 	TotalRequests     int64  `json:"total_requests"`
@@ -52,6 +56,8 @@ type Snapshot struct {
 	UplinkBytes       int64  `json:"uplink_bytes"`
 	DownlinkBytes     int64  `json:"downlink_bytes"`
 	Failures          int64  `json:"failed_requests"`
+	Truncated         int64  `json:"truncated_responses"`
+	LogFailures       int64  `json:"log_failures"`
 }
 
 func (m *Metrics) Snapshot() Snapshot {
@@ -65,5 +71,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		UplinkBytes:       m.totalUpstreamBytes.Load(),
 		DownlinkBytes:     m.totalClientBytes.Load(),
 		Failures:          m.failedRequests.Load(),
+		Truncated:         m.truncatedResponses.Load(),
+		LogFailures:       m.logFailures.Load(),
 	}
 }

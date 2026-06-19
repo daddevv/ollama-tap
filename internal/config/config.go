@@ -30,12 +30,12 @@ func RegisterFlags() {
 }
 
 var (
-	resolvedListen     *string
-	resolvedUpstream   *string
-	resolvedLogDir     *string
-	captureReqs        bool
-	captureResps       bool
-	captureChunks      bool
+	resolvedListen   *string
+	resolvedUpstream *string
+	resolvedLogDir   *string
+	captureReqs      bool
+	captureResps     bool
+	captureChunks    bool
 )
 
 func envBool(name string, fallback bool) bool {
@@ -85,6 +85,11 @@ func FromEnv() (*Config, error) {
 	}
 	if upstream.Scheme == "" {
 		upstream.Scheme = "http"
+	}
+	if upstream.Host == "" {
+		return nil, &ConfigError{
+			"OLLAMA_TAP_UPSTREAM must include a host (e.g. http://localhost:11434)",
+		}
 	}
 
 	captureReqsVal := captureReqs || os.Getenv("OLLAMA_TAP_CAPTURE_REQUESTS") == "true"

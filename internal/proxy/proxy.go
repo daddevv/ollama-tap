@@ -65,33 +65,41 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := logging.RecordID()
 	streamType := requestType(r.URL.Path)
 
-	// Always capture body bytes so we can forward and optionally log it.
-	reqBodyTruncated := false
-	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err == nil && len(bodyBytes) > 0 {
-		reqBodyTruncated = len(bodyBytes) == int(1<<20)
-		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	} else if r.Body != nil {
-		r.Body.Close()
-		bodyBytes = nil
-	}
+	// Capture body bytes only when needed (capture config or non-empty Content-Length).
+	var reqBodyTruncated bool
+	bodyBytes := make([]byte, 0)
 
-	// Log request metadata when capture is enabled.
-	if p.cfg.CaptureRequests && bodyBytes != nil && len(bodyBytes) > 0 {
-		if err := p.logger.WriteRequestLog(&logging.RequestLog{
-			ID:      id,
-			Model:   "",
-			ReqType: streamType,
-			Method:  r.Method,
-			Path:    r.URL.Path,
-			URL:     r.URL.String(),
-			Headers: headerMap(r.Header),
-			Body:        string(bodyBytes[:min(len(bodyBytes), 4096)]),
-			BodyTruncated: reqBodyTruncated,
-			Time:        time.Now().UTC().Format(time.RFC3339Nano),
-		}); err != nil {
-			log.Printf("ollama-tap: failed to write request log for %s: %v", id, err)
+	if p.cfg.CaptureRequests {
+		reqBodyTruncated = false
+		var readErr error
+		bodyBytes, readErr = io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if readErr == nil && len(bodyBytes) > 0 {
+			reqBodyTruncated = len(bodyBytes) == int(1<<20)
+		} else if bodyBytes == nil {
+			bodyBytes = make([]byte, 0)
 		}
+		r.Body.Close()
+
+		if len(bodyBytes) > 0 {
+			if err := p.logger.WriteRequestLog(&logging.RequestLog{
+				ID:            id,
+				Model:         "",
+				ReqType:       streamType,
+				Method:        r.Method,
+				Path:          r.URL.Path,
+				URL:           r.URL.String(),
+				Headers:       headerMap(r.Header),
+				Body:          string(bodyBytes[:min(len(bodyBytes), 4096)]),
+				BodyTruncated: reqBodyTruncated,
+				Time:          time.Now().UTC().Format(time.RFC3339Nano),
+			}); err != nil {
+				log.Printf("ollama-tap: failed to write request log for %s: %v", id, err)
+				p.metrics.RecordLogFailure()
+			}
+		}
+	} else {
+		// No capture needed — forward original body directly.
+		bodyBytes = nil
 	}
 
 	start := time.Now()
@@ -114,8 +122,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawPath != "" {
 		upstreamReq.URL.RawPath = r.URL.RawPath
 	}
-	if bodyBytes != nil {
+	if len(bodyBytes) > 0 {
 		upstreamReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	} else {
+		// Passthrough original body — no capture, so no buffering in memory.
+		upstreamReq.Body = r.Body
 	}
 	p.copyRequestHeaders(upstreamReq.Header, r.Header, r)
 
@@ -147,14 +158,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		truncated := len(bodyData) == int(1<<20)
 
-		// Warn if the body was truncated; the upstream may have sent more data than we captured.
-		if truncated {
-			log.Printf("ollama-tap: response body for %s truncated at 1 MiB; upstream may have sent more", id)
-		}
-
-		// Copy response headers and set truncation flag before writing status.
+		// Handle body truncation explicitly: record metric and set header.
 		copyNonReservedHeaders(w.Header(), resp.Header)
 		if truncated {
+			log.Printf("ollama-tap: response body for %s truncated at 1 MiB; upstream may have sent more", id)
+			p.metrics.RecordTruncated()
 			w.Header().Set("X-Response-Truncated", "true")
 		}
 		w.WriteHeader(resp.StatusCode)
@@ -164,15 +172,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.metrics.RecordClientBytes(int64(len(bodyData)))
 
 		if p.cfg.CaptureResponses {
-			if err := p.logger.WriteResponsePreview(&logging.ResponsePreview{
+			bodyPreviewLen := min(len(bodyData), 4096)
+			var bodyPreview string
+			if len(bodyData) > 0 {
+				bodyPreview = string(bodyData[:bodyPreviewLen])
+			}
+			prevErr := p.logger.WriteResponsePreview(&logging.ResponsePreview{
 				ID:            id,
 				StatusCode:    resp.StatusCode,
 				Headers:       headerMap(resp.Header),
-				Body:          string(bodyData[:min(len(bodyData), 4096)]),
+				Body:          bodyPreview,
 				BodyTruncated: truncated,
 				Time:          time.Now().UTC().Format(time.RFC3339Nano),
-			}); err != nil {
-				log.Printf("ollama-tap: failed to write response preview for %s: %v", id, err)
+			})
+			if prevErr != nil {
+				log.Printf("ollama-tap: failed to write response preview for %s: %v", id, prevErr)
+				p.metrics.RecordLogFailure()
 			}
 		}
 
@@ -349,7 +364,10 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 		w.Write([]byte(line + "\n"))
 
 		if len(chunks) >= streamChunkFlushThreshold {
-			p.logger.WriteStreamChunks(chunks)
+			if err := p.logger.WriteStreamChunks(chunks); err != nil {
+				log.Printf("ollama-tap: failed to write stream chunks for %s: %v", id, err)
+				p.metrics.RecordLogFailure()
+			}
 			chunks = nil
 		}
 	}
@@ -426,7 +444,10 @@ func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWr
 		}
 
 		if len(chunks) >= streamChunkFlushThreshold {
-			p.logger.WriteStreamChunks(chunks)
+			if err := p.logger.WriteStreamChunks(chunks); err != nil {
+				log.Printf("ollama-tap: failed to write stream chunks for %s: %v", id, err)
+				p.metrics.RecordLogFailure()
+			}
 			chunks = nil
 		}
 
