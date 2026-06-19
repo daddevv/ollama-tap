@@ -59,10 +59,6 @@ func New(cfg *config.Config, m *metrics.Metrics) (*Proxy, error) {
 
 // ServeHTTP implements the transparent proxy handler.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/_tap/") {
-		http.NotFound(w, r)
-		return
-	}
 
 	p.metrics.IncrementActive()
 	defer p.metrics.DecrementActive()

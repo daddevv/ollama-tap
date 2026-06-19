@@ -27,6 +27,9 @@ func FromEnv() (*Config, error) {
 	if err != nil {
 		return nil, &ConfigError{err.Error()}
 	}
+	if upstream.Scheme == "" {
+		upstream.Scheme = "http"
+	}
 	logDir := os.Getenv("OLLAMA_TAP_LOG_DIR")
 	if logDir == "" {
 		logDir = "/tmp/ollama-tap"

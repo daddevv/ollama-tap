@@ -199,9 +199,9 @@ func (l *Logger) WriteJournal(records []any) error {
 	}
 	defer f.Close()
 	for _, r := range records {
-		b, err := json.Marshal(r)
+		b, err := encode(r)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal journal record: %w", err)
 		}
 		b = append(b, '\n')
 		if _, err := f.Write(b); err != nil {
