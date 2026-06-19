@@ -234,10 +234,13 @@ not valid json at all
 	_, rw, fl := newBufWriter(&buf)
 
 	func() {
+		var panicRecovered bool
 		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("handleNDJSON panicked on malformed line: %v", r)
+			if recovered := recover(); recovered != nil && !panicRecovered {
+				panicRecovered = true
+				t.Errorf("handleNDJSON panicked on malformed line: %v", recovered)
 			}
+			return // clear pending panic to avoid double-panic
 		}()
 		p.handleNDJSON(strings.NewReader(ndjsonInput), rw, fl, "test-id")
 	}()
@@ -335,14 +338,14 @@ func TestNDJSONFlushThreshold(t *testing.T) {
 	}()
 
 	files, _ := os.ReadDir(dir)
-	var chunksFiles []string
+	var chunkFiles []string
 	for _, f := range files {
-		if strings.HasPrefix(f.Name(), "chunks_") {
-			chunksFiles = append(chunksFiles, f.Name())
+		if strings.HasSuffix(f.Name(), ".jsonl") {
+			chunkFiles = append(chunkFiles, f.Name())
 		}
 	}
-	if len(chunksFiles) == 0 {
-		t.Error("expected at least one chunks_* file after flush threshold")
+	if len(chunkFiles) == 0 {
+		t.Error("expected at least one chunk log file after flush threshold")
 	}
 }
 
@@ -715,7 +718,7 @@ func sseUpstream(t *testing.T, data []string) *httptest.Server {
 }
 
 func TestIntegrationSSEStreamForwarding(t *testing.T) {
-	sseUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		data := []string{
 			`data: {"id":"c1","choices":[{"delta":{"content":"Hello"},"index":0}]}`,
@@ -732,11 +735,11 @@ func TestIntegrationSSEStreamForwarding(t *testing.T) {
 			time.Sleep(2 * time.Millisecond)
 		}
 	}))
-	defer sseUpstream.Close()
+	defer upstreamSrv.Close()
 
 	cfg := &config.Config{
 		ListenAddr:          ":0",
-		Upstream:            mustParse(sseUpstream.URL),
+		Upstream:            mustParse(upstreamSrv.URL),
 		CaptureRequests:     false,
 		CaptureResponses:    true,
 		CaptureStreamChunks: true,
@@ -1254,12 +1257,13 @@ func TestIntegrationStreamChunksLoggedToDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
+	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 
 	files, _ := os.ReadDir(dir)
 	var chunkFiles []string
 	for _, f := range files {
-		if strings.HasPrefix(f.Name(), "chunks_") {
+		if strings.HasSuffix(f.Name(), ".jsonl") {
 			chunkFiles = append(chunkFiles, f.Name())
 		}
 	}
@@ -1278,28 +1282,3 @@ func TestIntegrationStreamChunksLoggedToDisk(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Helper: flushResponseWriter wraps a ResponseRecorder to provide http.Flusher.
-// ---------------------------------------------------------------------------
-
-func newFlushWriter(buf io.Writer) (http.ResponseWriter, http.Flusher) {
-	rec := httptest.NewRecorder()
-	return &flushRW{ResponseWriter: rec, writer: buf}, &flushFlusher{ResponseWriter: rec, writer: buf}
-}
-
-type flushRW struct {
-	http.ResponseWriter
-	writer io.Writer
-}
-
-func (f *flushRW) Write(b []byte) (int, error) {
-	f.writer.Write(b)
-	return f.ResponseWriter.Write(b)
-}
-
-type flushFlusher struct {
-	http.ResponseWriter
-	writer io.Writer
-}
-
-func (f *flushFlusher) Flush() {}
