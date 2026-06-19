@@ -135,6 +135,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		w.Write(bodyData)
 
+		p.metrics.RecordUpstreamBytes(int64(len(bodyData)))
+		p.metrics.RecordClientBytes(int64(len(bodyData)))
+
 		if p.cfg.CaptureResponses {
 			p.logger.WriteResponsePreview(&logging.ResponsePreview{
 				ID:         id,

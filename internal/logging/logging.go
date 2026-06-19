@@ -146,3 +146,23 @@ func (l *Logger) WriteStreamChunks(chunks []*StreamChunk) error {
 	}
 	return nil
 }
+// WriteJournal writes multiple JSONL records to a single journal file,
+// reducing per-request file-open overhead. Each record is written on its own line.
+func (l *Logger) WriteJournal(records []any) error {
+	f, err := os.OpenFile(filepath.Join(l.logDir, "journal.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for _, r := range records {
+		b, err := json.Marshal(r)
+		if err != nil {
+			return err
+		}
+		b = append(b, '\n')
+		if _, err := f.Write(b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
