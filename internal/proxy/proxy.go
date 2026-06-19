@@ -371,6 +371,7 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 		}
 
 		w.Write([]byte(line + "\n"))
+		flusher.Flush()
 
 		if len(chunks) >= streamChunkFlushThreshold {
 			if err := p.logger.WriteStreamChunks(chunks); err != nil {
@@ -408,6 +409,7 @@ func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWr
 		}
 
 		w.Write([]byte(line + "\n"))
+		flusher.Flush()
 
 		if !strings.HasPrefix(line, "data: ") {
 			flusher.Flush()
