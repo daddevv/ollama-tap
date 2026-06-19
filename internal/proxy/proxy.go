@@ -30,9 +30,15 @@ type Proxy struct {
 	metrics *metrics.Metrics
 	logger  *logging.Logger
 	client  *http.Client
+	tracker *metrics.ModelUsageTracker
 }
 
 func New(cfg *config.Config, m *metrics.Metrics) (*Proxy, error) {
+	return NewWithTracker(cfg, m, nil)
+}
+
+// NewWithTracker creates a Proxy with an optional per-model usage tracker.
+func NewWithTracker(cfg *config.Config, m *metrics.Metrics, tracker *metrics.ModelUsageTracker) (*Proxy, error) {
 	l := logging.New(cfg.LogDir)
 
 	transport := &http.Transport{
@@ -52,7 +58,7 @@ func New(cfg *config.Config, m *metrics.Metrics) (*Proxy, error) {
 		},
 	}
 
-	p := &Proxy{cfg: cfg, metrics: m, logger: l, client: client}
+	p := &Proxy{cfg: cfg, metrics: m, logger: l, client: client, tracker: tracker}
 	return p, nil
 }
 
@@ -352,6 +358,9 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 					Time:      time.Now().UTC().Format(time.RFC3339Nano),
 				})
 			}
+			if stats.EvalCount > 0 {
+				p.recordModelUsage(model, 0, int64(stats.EvalCount))
+			}
 		} else if p.cfg.CaptureStreamChunks {
 			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
@@ -417,6 +426,7 @@ func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWr
 
 		if parser.IsUsageEvent(obj) {
 			usage := parser.ParseOpenAIUsage(obj)
+			p.recordModelUsage(model, usage.PromptTokens, usage.CompletionTokens)
 			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "usage",
@@ -489,6 +499,15 @@ func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path 
 		return err
 	}
 	return nil
+}
+
+
+// recordModelUsage records per-model usage data in the tracker.
+func (p *Proxy) recordModelUsage(modelName string, promptTokens, completionTokens int64) {
+	if p.tracker == nil || modelName == "" {
+		return
+	}
+	p.tracker.Record(modelName, promptTokens, completionTokens)
 }
 
 func headerMap(h http.Header) map[string][]string {

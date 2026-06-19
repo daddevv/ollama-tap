@@ -200,6 +200,7 @@ Structure:
 - **Polling loop**: `fetch` to `/api/snapshot`, `/api/history`, `/api/models` every 5 seconds; updates charts in place via chart.js `data.datasets[].data.push()` and `.shift()`
 
 Charts configuration:
+
 - Use `chartjs-plugin-streaming` is not needed — we manage data ourselves
 - All three charts share the same time X-axis for correlation
 - Responsive layout with CSS Grid or flexbox (no frameworks)
@@ -232,7 +233,8 @@ The existing principles remain valid. Add one:
 4. **Simple deployment** (existing)
 5. **Dashboard data has zero impact on proxy correctness** — metrics collection never blocks or fails the upstream response.
 
-## Updated "non-goals for v1" (remove these, they are no longer non-goals):
+## Updated "non-goals for v1" (remove these, they are no longer non-goals)
+
 - ~~a web UI~~ <-- done
 - database storage <- still not in scope
 - OpenTelemetry, Langfuse, or external tracing backends <- still not in scope

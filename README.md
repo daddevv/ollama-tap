@@ -75,6 +75,10 @@ These endpoints are accessible at the proxy's listen address for monitoring:
 |---|---|---|
 | `/_tap/health` | GET | Health check — returns `{"ok":true}` |
 | `/_tap/stats` | GET | In-memory counters snapshot |
+| `/_tap/dashboard` | GET | Live observability dashboard (real-time charts) |
+| `/_tap/dashboard/api/snapshot` | GET | Current live state (active connections, uptime, total requests) |
+| `/_tap/dashboard/api/history?minutes=60` | GET | Time-series history for charting (delta snapshots) |
+| `/_tap/dashboard/api/models` | GET | Per-model token usage map |
 
 The `/stats` response includes: `total_requests`, `uptime`, `last_request`, `streaming_connections`, `non_streaming_connections`, `active_connections`, `uplink_bytes`, `downlink_bytes`, `failed_requests`.
 
@@ -142,6 +146,17 @@ Or for direct Ollama paths without `/v1`:
 name = "Ollama Tap"
 base_url = "http://192.168.0.55:11435"
 ```
+
+## Dashboard
+
+The built-in dashboard (`/_tap/dashboard`) provides real-time observability with zero external dependencies — all data is collected in-process and served via Go's embedded file server. Open `http://<listen-addr>/_tap/dashboard` in your browser to see:
+
+- **Live counters**: active connections, total requests, streaming count, uptime
+- **Requests/sec line chart**: over the last ~60 minutes (auto-refreshes every 5s)
+- **Success/failure rate bar chart**: green = successful, red = failed per interval
+- **Model usage table**: per-model prompt/completion/total token counts and request frequency
+
+No setup required — the dashboard is compiled into the binary via Go's `embed` directive. The underlying metrics store runs on a 5-second tick with a ring buffer of ~720 entries (~60 minutes), so data persists in memory without any disk I/O.
 
 ## Deploying
 

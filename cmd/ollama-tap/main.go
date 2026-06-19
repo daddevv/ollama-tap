@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/daddevv/ollama-tap/internal/config"
+	"github.com/daddevv/ollama-tap/internal/dashboard"
 	"github.com/daddevv/ollama-tap/internal/health"
 	"github.com/daddevv/ollama-tap/internal/metrics"
 	"github.com/daddevv/ollama-tap/internal/proxy"
@@ -26,7 +27,11 @@ func main() {
 	}
 
 	m := metrics.New()
-	p, err := proxy.New(cfg, m)
+	tracker := metrics.NewModelUsageTracker()
+	store := metrics.NewRingStore(m, tracker)
+	defer store.Stop()
+
+	p, err := proxy.NewWithTracker(cfg, m, tracker)
 	if err != nil {
 		log.Fatalf("proxy init: %v", err)
 	}
@@ -34,6 +39,7 @@ func main() {
 	h := health.NewHealthHandler(m)
 
 	mux := http.NewServeMux()
+	dashboard.RegisterHandlers(mux, store, tracker, m)
 	mux.Handle("/_tap/health", h)
 	mux.Handle("/_tap/stats", h)
 	mux.Handle("/", p)
