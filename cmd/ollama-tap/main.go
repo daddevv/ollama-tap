@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +17,9 @@ import (
 )
 
 func main() {
+	config.RegisterFlags()
+	flag.Parse()
+
 	cfg, err := config.FromEnv()
 	if err != nil {
 		log.Fatalf("config error: %v", err)
