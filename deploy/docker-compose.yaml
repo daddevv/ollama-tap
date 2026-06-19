@@ -1,0 +1,18 @@
+services:
+  ollama-tap:
+    image: ollama-tap:latest
+    build:
+      context: .
+    container_name: ollama-tap
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:11435:11435"
+    environment:
+      OLLAMA_TAP_LISTEN_ADDR: "0.0.0.0:11435"
+      OLLAMA_TAP_UPSTREAM: "http://host.docker.internal:11434"
+      OLLAMA_TAP_LOG_DIR: "/logs"
+      OLLAMA_TAP_CAPTURE_REQUESTS: "true"
+      OLLAMA_TAP_CAPTURE_RESPONSES: "true"
+      OLLAMA_TAP_CAPTURE_STREAM_CHUNKS: "true"
+    volumes:
+      - ./logs:/logs

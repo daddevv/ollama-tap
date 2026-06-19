@@ -1,0 +1,23 @@
+# Build artifacts
+*.exe
+*.exe~
+dll.*
+*.so
+*.dylib
+bin/ollama-tap
+
+# Test binaries
+*.test
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs (runtime)
+logs/
+/tmp/ollama-tap/
