@@ -536,8 +536,8 @@ html { transition: color 0.35s ease, background-color 0.35s ease; }
     history.forEach(function (entry) {
       var promptRate = perSecond(entry.prompt_tokens_delta || 0, entry.bucket_seconds);
       var completionRate = perSecond(entry.completion_tokens_delta || 0, entry.bucket_seconds);
-      var successCount = entry.successful_delta || 0;
-      var failureCount = entry.failures_delta || 0;
+      var successCount = Math.max(0, entry.successful_delta || 0);
+      var failureCount = Math.max(0, entry.failures_delta || 0);
       var streamingCount = entry.streaming_delta || 0;
       var requestCount = entry.total_reqs_delta || 0;
       var bucketSeconds = entry.bucket_seconds || (POLL_MS / 1000);

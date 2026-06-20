@@ -197,6 +197,9 @@ func (s *RingStore) History(nMinutes int) []HistoryEntry {
 		delta.NonStreaming = e.nonStreaming - prev.nonStreaming
 		delta.Failures = e.failures - prev.failures
 		delta.Successful = (e.totalReqs - e.failures) - (prev.totalReqs - prev.failures)
+		if delta.Successful < 0 {
+			delta.Successful = 0
+		}
 		delta.PromptTokens = e.promptTokens - prev.promptTokens
 		delta.CompletionTokens = e.completionTokens - prev.completionTokens
 		deltaEntries = append(deltaEntries, delta)
