@@ -150,7 +150,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// streamFmt will be set when we need format-specific streaming handling
 	var streamFmt streamFormat
 	isUpstreamStreaming := isStreamResponse(resp)
-	if !isUpstreamStreaming && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/generate") {
+	if !isUpstreamStreaming && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/generate" || r.URL.Path == "/v1/responses") {
 		isUpstreamStreaming = isRequestStream(r.URL.Path, bodyBytes)
 	}
 
@@ -159,19 +159,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isUpstreamStreaming {
 		p.metrics.IncrementStreaming()
 		defer p.metrics.DecrementStreaming()
-		if w.Header().Get("Content-Type") == "" {
-			w.Header().Set("Content-Type", "text/event-stream")
-		}
-		// Ensure SSE-critical headers so clients like github.copilot-chat don't buffer or drop the stream.
-		if w.Header().Get("Cache-Control") == "" {
-			w.Header().Set("Cache-Control", "no-cache")
-		}
-		if w.Header().Get("Connection") == "" {
-			w.Header().Set("Connection", "keep-alive")
-		}
-		if w.Header().Get("X-Accel-Buffering") == "" {
-			w.Header().Set("X-Accel-Buffering", "no")
-		}
+		// Force SSE-critical headers for ALL streaming responses — never conditional.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
 
 		// Buffer resp.Body so detectStreamFormat can peek at format without consuming bytes.
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -444,7 +436,7 @@ func isStreamResponse(resp *http.Response) bool {
 
 // isRequestStream checks if the request body explicitly sets stream=true.
 func isRequestStream(path string, body []byte) bool {
-	if !strings.Contains(path, "/api/generate") && !strings.Contains(path, "/api/chat") && !strings.Contains(path, "/v1/chat/completions") && !strings.Contains(path, "/v1/generate") {
+	if !strings.Contains(path, "/api/generate") && !strings.Contains(path, "/api/chat") && !strings.Contains(path, "/v1/chat/completions") && !strings.Contains(path, "/v1/generate") && !strings.Contains(path, "/v1/responses") {
 		return false
 	}
 	if len(body) == 0 {
@@ -665,6 +657,10 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 	if len(chunks) > 0 {
 		p.logger.WriteStreamChunks(chunks)
 	}
+
+	// Send [DONE] marker so streaming clients (github.copilot-chat, OpenAI SDK) know the stream completed.
+	w.Write([]byte("data: [DONE]\n\n"))
+	flusher.Flush()
 
 	return model
 }
