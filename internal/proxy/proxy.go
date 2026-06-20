@@ -147,6 +147,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Copy response headers to client (strip hop-by-hop).
 	copyNonReservedHeaders(w.Header(), resp.Header)
 	// Read body first (before writing headers) so we can flag truncation.
+	// streamFmt will be set when we need format-specific streaming handling
+	var streamFmt streamFormat
 	isUpstreamStreaming := isStreamResponse(resp)
 	if !isUpstreamStreaming && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate") {
 		isUpstreamStreaming = isRequestStream(r.URL.Path, bodyBytes)
@@ -160,7 +162,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if w.Header().Get("Content-Type") == "" {
 			w.Header().Set("Content-Type", "text/event-stream")
 		}
-		p.handleStreaming(r.Context(), w, resp.Body, id, streamType, start)
+
+		// Buffer resp.Body so detectStreamFormat can peek at format without consuming bytes.
+		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		streamFmt = detectStreamFormatFromReader(bytes.NewReader(bodyData), resp)
+
+		p.handleStreaming(r.Context(), w, bytes.NewReader(bodyData), id, streamType, start, streamFmt)
 	} else {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		truncated := len(bodyData) == int(1<<20)
@@ -337,6 +344,88 @@ func requestType(path string) string {
 	}
 }
 
+// detectStreamFormat determines whether an upstream response is streaming and,
+// if so, which format (SSE or NDJSON) it uses. It peeks at the response body
+// to handle cases where Content-Type is ambiguous (e.g., Ollama returning
+// "text/plain; charset=utf-8" for SSE streams on /v1/responses).
+func detectStreamFormat(resp *http.Response, reqPath string, reqBody []byte) streamFormat {
+	// 1. Clear content-type from headers — trust what the server tells us.
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "text/event-stream") {
+		return formatSSE
+	}
+	if strings.Contains(ct, "application/x-ndjson") {
+		return formatNDJSON
+	}
+
+	// 2. Ambiguous content-type: peek at the first line of the response body.
+	//    SSE lines start with "data: " (per RFC 8126 / Server-Sent Events spec).
+	if resp.Body != nil {
+		scanner := bufio.NewScanner(io.LimitReader(resp.Body, 512))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			// SSE format: lines start with "data: <json>
+			if strings.HasPrefix(line, "data:") && len(line) > 5 {
+				return formatSSE
+			}
+			// NDJSON format: raw JSON objects (start with '{' or '[')
+			if line[0] == '{' || line[0] == '[' {
+				return formatNDJSON
+			}
+			break // unexpected content, not a recognized stream format
+		}
+	}
+
+	// 3. Fallback: if the request explicitly asks for streaming, assume NDJSON
+	//    (Ollama's /api/chat and /api/generate endpoints return NDJSON).
+	if reqPath == "/api/chat" || reqPath == "/api/generate" {
+		return formatNDJSON
+	}
+
+	return formatUnknown
+}
+
+// detectStreamFormatFromReader determines the stream format from an io.Reader
+// (without consuming more than ~512 bytes). Used when resp.Body needs to be
+// buffered first so that detected bytes are not lost before forwarding.
+func detectStreamFormatFromReader(body io.Reader, resp *http.Response) streamFormat {
+	// 1. Check Content-Type header.
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "text/event-stream") {
+		return formatSSE
+	}
+	if strings.Contains(ct, "application/x-ndjson") {
+		return formatNDJSON
+	}
+
+	// 2. Ambiguous content-type: peek at the first 512 bytes of body.
+	scanner := bufio.NewScanner(io.LimitReader(body, 512))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		// SSE format: lines start with "data:" (per SSE spec).
+		if strings.HasPrefix(line, "data:") && len(line) > 5 {
+			return formatSSE
+		}
+		// NDJSON format: raw JSON objects.
+		if line[0] == '{' || line[0] == '[' {
+			return formatNDJSON
+		}
+		break // unexpected content, not a recognized stream format
+	}
+
+	// 3. Fallback: default to NDJSON (Ollama streaming typically uses NDJSON).
+	return formatNDJSON
+}
+
+// isStreamResponse checks only the Content-Type header for stream indicators.
+// It does NOT peek at the response body; use detectStreamFormat in ServeHTTP
+// where we need more accurate detection via body inspection.
 func isStreamResponse(resp *http.Response) bool {
 	ct := resp.Header.Get("Content-Type")
 	return strings.Contains(ct, "text/event-stream") ||
@@ -367,8 +456,8 @@ func isRequestStream(path string, body []byte) bool {
 	return s == "true"
 }
 
-// handleStreaming forwards the response body incrementally while extracting stats.
-func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time) {
+// handleStreaming forwards the upstream response body incrementally while extracting usage stats.
+func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time, sfmt streamFormat) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("ollama-tap: streaming panic recovered for %s: %v", id, r)
@@ -382,12 +471,122 @@ func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body
 	}
 
 	var statsModel string
-	statsModel = p.handleNDJSON(ctx, body, w, flusher, id)
+	switch sfmt {
+	case formatSSE:
+		statsModel = p.handleSSEPassthrough(ctx, body, w, flusher, id)
+	case formatNDJSON:
+		statsModel = p.handleNDJSON(ctx, body, w, flusher, id)
+	default:
+		// Unknown format — pass through as-is to avoid breaking the stream.
+		io.Copy(w, body)
+		return
+	}
 
 	if err := p.logSummary(id, streamType, start, "", "", nil, statsModel, nil, ""); err != nil {
 		log.Printf("ollama-tap: failed to write summary for %s: %v", id, err)
 	}
 }
+
+// streamFormat distinguishes SSE from NDJSON upstream responses.
+type streamFormat int
+
+const (
+	formatUnknown  streamFormat = iota // not a recognized stream format
+	formatSSE                          // Server-Sent Events (OpenAI-compatible)
+	formatNDJSON                       // Ollama native newline-delimited JSON
+)
+
+// handleSSEPassthrough forwards an SSE-formatted response body to the client.
+// It preserves the original "data: <json>" format so clients like Codex
+// can parse the SSE stream correctly (no stripping of prefixes or separators).
+func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+
+	var model string
+	var chunks []*logging.StreamChunk
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return model
+		default:
+		}
+
+		rawLine := scanner.Text()
+		w.Write([]byte(rawLine + "\n"))
+
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			flusher.Flush()
+			continue
+		}
+
+		// Parse SSE data events for chunk capture.
+		if !strings.HasPrefix(line, "data: ") {
+			flusher.Flush()
+			continue
+		}
+		dataStr := strings.TrimPrefix(line, "data: ")
+		obj, ok := parser.ParseOpenAISSEEvent("data: " + dataStr)
+		if !ok {
+			flusher.Flush()
+			continue
+		}
+
+		// Extract model name from the first valid event.
+		if m := parser.ParseResponsesModel(obj); m != "" && model == "" {
+			model = m
+		}
+
+		// Build chunk records for logging (mirrors handleSSE logic).
+		if parser.IsUsageEvent(obj) {
+			usage := parser.ParseOpenAIUsage(obj)
+			p.recordModelUsage(model, usage.PromptTokens, usage.CompletionTokens)
+			chunks = append(chunks, &logging.StreamChunk{
+				ID:        id,
+				ChunkType: "usage",
+				Model:     model,
+				TokenCnt:  usage.CompletionTokens,
+				Done:      true,
+				Time:      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		} else if delta, _ := parser.ExtractDelta(obj); delta != "" {
+			chunks = append(chunks, &logging.StreamChunk{
+				ID:        id,
+				ChunkType: "text",
+				Model:     model,
+				Delta:     delta[:min(len(delta), 512)],
+				Time:      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		} else if p.cfg.CaptureStreamChunks {
+			chunks = append(chunks, &logging.StreamChunk{
+				ID:        id,
+				ChunkType: "text",
+				Model:     model,
+				Delta:     dataStr[:min(len(dataStr), 512)],
+				Time:      time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+		if len(chunks) >= streamChunkFlushThreshold {
+			if err := p.logger.WriteStreamChunks(chunks); err != nil {
+				log.Printf("ollama-tap: failed to write stream chunks for %s: %v", id, err)
+				p.metrics.RecordLogFailure()
+			}
+			chunks = nil
+		}
+
+		flusher.Flush()
+	}
+
+	if len(chunks) > 0 {
+		p.logger.WriteStreamChunks(chunks)
+	}
+
+	return model
+}
+
 
 // handleNDJSON reads Ollama native newline-delimited JSON and streams it to the client.
 func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
