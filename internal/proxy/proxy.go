@@ -480,6 +480,7 @@ func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http
 	var model string
 	trackedModel := requestModel
 	sawDoneMarker := false
+	recordedUsage := false
 	var chunks []*logging.StreamChunk
 
 	for scanner.Scan() {
@@ -532,11 +533,18 @@ func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http
 				completionTokens = usage.CompletionTokens
 			} else if usage := parser.ParseOllamaSSEUsage(obj); usage != nil {
 				promptTokens = usage.PromptTokens
+				if promptTokens == 0 {
+					promptTokens = usage.InputTokens
+				}
 				completionTokens = usage.CompletionTokens
+				if completionTokens == 0 {
+					completionTokens = usage.OutputTokens
+				}
 			}
 			// Record when we have a tracked model, non-zero tokens, and a valid usage event.
-			if p.tracker != nil && trackedModel != "" && (promptTokens + completionTokens > 0) {
+			if p.tracker != nil && trackedModel != "" && !recordedUsage && (promptTokens+completionTokens > 0) {
 				p.recordModelUsage(trackedModel, promptTokens, completionTokens)
+				recordedUsage = true
 				chunks = append(chunks, &logging.StreamChunk{
 					ID:        id,
 					ChunkType: "usage",
@@ -688,7 +696,6 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 	}
 	return model
 }
-
 
 // logSummary writes a per-request summary record.
 func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path string, body []byte, statsModel string, usage *parser.OpenAIUsage, errType string) error {

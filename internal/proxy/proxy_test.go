@@ -1507,6 +1507,77 @@ func TestV1ResponsesStreamingDetection(t *testing.T) {
 	}
 }
 
+func TestIntegrationV1ResponsesQwenNestedUsageTracksTokens(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+
+		fmt.Fprintf(w, "event: response.created\n")
+		fmt.Fprintf(w, `data: {"response":{"id":"resp_123","model":"qwen3.6:latest","status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"}`+"\n\n")
+		flusher.Flush()
+
+		fmt.Fprintf(w, "event: response.reasoning_summary_text.delta\n")
+		fmt.Fprintf(w, `data: {"delta":"Thinking","item_id":"rs_123","sequence_number":1,"type":"response.reasoning_summary_text.delta"}`+"\n\n")
+		flusher.Flush()
+
+		fmt.Fprintf(w, "event: response.completed\n")
+		fmt.Fprintf(w, `data: {"response":{"id":"resp_123","model":"qwen3.6:latest","status":"completed","usage":{"input_tokens":20,"input_tokens_details":{"cached_tokens":0},"output_tokens":16,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":36}},"sequence_number":2,"type":"response.completed"}`+"\n\n")
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		ListenAddr:          ":0",
+		Upstream:            mustParse(upstream.URL),
+		CaptureRequests:     false,
+		CaptureResponses:    false,
+		CaptureStreamChunks: false,
+		LogDir:              t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(p)
+	defer httpSrv.Close()
+
+	reqBody := `{"model":"qwen3.6:latest","input":"Say hi in one word.","stream":true,"max_output_tokens":16}`
+	resp, err := http.Post(httpSrv.URL+"/v1/responses", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatalf("drain body: %v", err)
+	}
+
+	snap := tracker.Snapshot()
+	usage, ok := snap["qwen3.6:latest"]
+	if !ok {
+		t.Fatal("expected qwen3.6:latest in tracker snapshot")
+	}
+	if usage.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", usage.RequestCount)
+	}
+	if usage.PromptTokens != 20 {
+		t.Fatalf("prompt_tokens: got %d, want 20", usage.PromptTokens)
+	}
+	if usage.CompletionTokens != 16 {
+		t.Fatalf("completion_tokens: got %d, want 16", usage.CompletionTokens)
+	}
+	if usage.TotalTokens != 36 {
+		t.Fatalf("total_tokens: got %d, want 36", usage.TotalTokens)
+	}
+}
+
 func TestIntegrationSSETracksRequestModelWhenResponseOmitsModel(t *testing.T) {
 	tracker := metrics.NewModelUsageTracker()
 	defer tracker.Stop()

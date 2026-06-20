@@ -284,3 +284,169 @@ func TestParseOllamaSSEUsage(t *testing.T) {
 		}
 	})
 }
+
+func TestParseOllamaSSEUsagePrecedence(t *testing.T) {
+	t.Run("OpenAI fields take precedence over alias", func(t *testing.T) {
+		obj := map[string]json.RawMessage{
+			"usage": json.RawMessage(`{"prompt_tokens":5,"completion_tokens":3,"input_tokens":10,"output_tokens":4}`),
+		}
+		u := ParseOllamaSSEUsage(obj)
+		if u == nil {
+			t.Fatal("expected usage")
+		}
+		if u.PromptTokens != 5 {
+			t.Errorf("prompt_tokens = %d, want 5", u.PromptTokens)
+		}
+		if u.CompletionTokens != 3 {
+			t.Errorf("completion_tokens = %d, want 3", u.CompletionTokens)
+		}
+		// Alias fields should NOT override OpenAI fields when present
+		if u.InputTokens != 0 {
+			t.Errorf("input_tokens should be 0 (OpenAI prompt_tokens takes precedence), got %d", u.InputTokens)
+		}
+		if u.OutputTokens != 0 {
+			t.Errorf("output_tokens should be 0 (OpenAI completion_tokens takes precedence), got %d", u.OutputTokens)
+		}
+	})
+
+	t.Run("alias fields used when OpenAI fields absent", func(t *testing.T) {
+		obj := map[string]json.RawMessage{
+			"usage": json.RawMessage(`{"input_tokens":15,"output_tokens":8}`),
+		}
+		u := ParseOllamaSSEUsage(obj)
+		if u == nil {
+			t.Fatal("expected usage")
+		}
+		// Alias fields should be populated since no OpenAI fields exist
+		if u.InputTokens != 15 {
+			t.Errorf("input_tokens = %d, want 15", u.InputTokens)
+		}
+		if u.OutputTokens != 8 {
+			t.Errorf("output_tokens = %d, want 8", u.OutputTokens)
+		}
+	})
+
+	t.Run("OpenAI fields take precedence over nanosecond fallback", func(t *testing.T) {
+		obj := map[string]json.RawMessage{
+			"usage": json.RawMessage(`{"prompt_tokens":7,"completion_tokens":2,"prompt_ns":999,"completion_ns":888}`),
+		}
+		u := ParseOllamaSSEUsage(obj)
+		if u == nil {
+			t.Fatal("expected usage")
+		}
+		if u.PromptTokens != 7 {
+			t.Errorf("prompt_tokens = %d, want 7", u.PromptTokens)
+		}
+		if u.CompletionTokens != 2 {
+			t.Errorf("completion_tokens = %d, want 2", u.CompletionTokens)
+		}
+	})
+
+	t.Run("nanosecond fallback when no token fields present", func(t *testing.T) {
+		obj := map[string]json.RawMessage{
+			"usage": json.RawMessage(`{"prompt_ns":100,"completion_ns":200}`),
+		}
+		u := ParseOllamaSSEUsage(obj)
+		if u == nil {
+			t.Fatal("expected usage")
+		}
+		if u.PromptTokens != 100 {
+			t.Errorf("prompt_tokens (from ns) = %d, want 100", u.PromptTokens)
+		}
+		if u.CompletionTokens != 200 {
+			t.Errorf("completion_tokens (from ns) = %d, want 200", u.CompletionTokens)
+		}
+	})
+
+	t.Run("explicit zero OpenAI fields excludes alias fallback", func(t *testing.T) {
+		// When prompt_tokens/completion_tokens are explicitly in the JSON (even as 0),
+		// they take precedence and alias fields are not used.
+		obj := map[string]json.RawMessage{
+			"usage": json.RawMessage(`{"prompt_tokens":0,"completion_tokens":0,"input_tokens":20,"output_tokens":12}`),
+		}
+		u := ParseOllamaSSEUsage(obj)
+		// Returns nil because all usable values are zero (OpenAI fields present but zero,
+		// alias excluded due to precedence, no nanosecond fallback available)
+		if u != nil {
+			t.Errorf("expected nil usage when OpenAI fields explicit zero with no alias fallback, got %+v", u)
+		}
+	})
+}
+
+func TestParseResponsesModelNestedResponse(t *testing.T) {
+	raw := map[string]json.RawMessage{
+		"response": json.RawMessage(`{"model":"qwen3.6:latest","usage":null}`),
+	}
+	got := ParseResponsesModel(raw)
+	if got != "qwen3.6:latest" {
+		t.Errorf("model = %q, want %q", got, "qwen3.6:latest")
+	}
+}
+
+func TestExtractUsageFromResponsesEventNestedAlias(t *testing.T) {
+	raw := map[string]json.RawMessage{
+		"type": json.RawMessage(`"response.completed"`),
+		"response": json.RawMessage(`{
+			"model":"qwen3.6:latest",
+			"usage":{
+				"input_tokens":20,
+				"input_tokens_details":{"cached_tokens":0},
+				"output_tokens":16,
+				"output_tokens_details":{"reasoning_tokens":0},
+				"total_tokens":36
+			}
+		}`),
+	}
+
+	usage := ExtractUsageFromResponsesEvent(raw)
+	if usage == nil {
+		t.Fatal("expected nested usage")
+	}
+	normalized := NormalizeUsage(usage)
+	if normalized.InputTokens != 20 {
+		t.Errorf("input tokens = %d, want 20", normalized.InputTokens)
+	}
+	if normalized.OutputTokens != 16 {
+		t.Errorf("output tokens = %d, want 16", normalized.OutputTokens)
+	}
+	if normalized.TotalTokens != 36 {
+		t.Errorf("total tokens = %d, want 36", normalized.TotalTokens)
+	}
+	if !normalized.UsageReliable {
+		t.Error("expected reliable usage")
+	}
+
+	parsed := ParseOpenAIUsage(raw)
+	if parsed == nil {
+		t.Fatal("expected ParseOpenAIUsage to normalize nested alias usage")
+	}
+	if parsed.PromptTokens != 20 {
+		t.Errorf("prompt_tokens = %d, want 20", parsed.PromptTokens)
+	}
+	if parsed.CompletionTokens != 16 {
+		t.Errorf("completion_tokens = %d, want 16", parsed.CompletionTokens)
+	}
+	if parsed.TotalTokens != 36 {
+		t.Errorf("total_tokens = %d, want 36", parsed.TotalTokens)
+	}
+}
+
+func TestParseOpenAIChatNonStreamingAliasOnly(t *testing.T) {
+	body := []byte(`{"id":"resp_123","object":"response","model":"qwen3.6:latest","usage":{"input_tokens":7,"output_tokens":9,"total_tokens":16}}`)
+	usage, err := ParseOpenAIChatNonStreaming(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usage == nil {
+		t.Fatal("expected alias-only usage")
+	}
+	if usage.PromptTokens != 7 {
+		t.Errorf("prompt_tokens = %d, want 7", usage.PromptTokens)
+	}
+	if usage.CompletionTokens != 9 {
+		t.Errorf("completion_tokens = %d, want 9", usage.CompletionTokens)
+	}
+	if usage.TotalTokens != 16 {
+		t.Errorf("total_tokens = %d, want 16", usage.TotalTokens)
+	}
+}
