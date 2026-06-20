@@ -204,19 +204,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if len(bodyData) > 0 && p.tracker != nil {
 			var modelName string
 			if len(bodyBytes) > 0 {
-				var raw map[string]json.RawMessage
-				if err := json.Unmarshal(bodyBytes, &raw); err == nil {
-					if m, ok := raw["model"]; ok {
-						json.Unmarshal(m, &modelName)
-					}
+				var req struct {
+					Model string `json:"model"`
+				}
+				if err := json.Unmarshal(bodyBytes, &req); err == nil && req.Model != "" {
+					modelName = req.Model
 				}
 			}
 			if modelName == "" && len(bodyData) > 0 {
-				var raw map[string]json.RawMessage
-				if err := json.Unmarshal(bodyData, &raw); err == nil {
-					if m, ok := raw["model"]; ok {
-						json.Unmarshal(m, &modelName)
-					}
+				var resp struct {
+					Model string `json:"model"`
+				}
+				if err := json.Unmarshal(bodyData, &resp); err == nil && resp.Model != "" {
+					modelName = resp.Model
 				}
 			}
 			if modelName != "" {
@@ -360,6 +360,12 @@ func isRequestStream(path string, body []byte) bool {
 
 // handleStreaming forwards the response body incrementally while extracting stats.
 func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ollama-tap: streaming panic recovered for %s: %v", id, r)
+		}
+	}()
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -413,7 +419,7 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 					Time:      time.Now().UTC().Format(time.RFC3339Nano),
 				})
 			}
-			if stats.EvalCount > 0 {
+			if stats.Done == true {
 				p.recordModelUsage(model, 0, int64(stats.EvalCount))
 			}
 		} else if p.cfg.CaptureStreamChunks {
@@ -426,7 +432,6 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 		}
 
 		w.Write([]byte(line + "\n"))
-		flusher.Flush()
 
 		if len(chunks) >= streamChunkFlushThreshold {
 			if err := p.logger.WriteStreamChunks(chunks); err != nil {
@@ -445,6 +450,8 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 }
 
 // handleSSE reads OpenAI-compatible SSE stream and streams to the client.
+// Note: This handler is currently dead code — handleStreaming unconditionally
+// calls handleNDJSON. Keep this function until all callers are migrated or it is removed.
 func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
@@ -464,7 +471,6 @@ func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWr
 		}
 
 		w.Write([]byte(line + "\n"))
-		flusher.Flush()
 
 		if !strings.HasPrefix(line, "data: ") {
 			flusher.Flush()
@@ -557,7 +563,6 @@ func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path 
 	}
 	return nil
 }
-
 
 // recordModelUsage records per-model usage data in the tracker.
 func (p *Proxy) recordModelUsage(modelName string, promptTokens, completionTokens int64) {

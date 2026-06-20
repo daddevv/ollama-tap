@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/daddevv/ollama-tap/internal/metrics"
 )
@@ -36,13 +37,13 @@ func RegisterHandlers(mux *http.ServeMux, store *metrics.RingStore, tracker *met
 		snap := store.Snapshot()
 		st := m.Snapshot()
 		out := map[string]interface{}{
-			"timestamp":                   snap["timestamp"],
-			"active_connections":          snap["active_connections"],
-			"request_count":               st.TotalRequests,
-			"total_requests":              st.TotalRequests,
-			"streaming_connections":       st.StreamingCount,
-			"non_streaming_connections":   st.NonStreamingCount,
-			"uptime":                      st.Uptime,
+			"timestamp":                 snap["timestamp"],
+			"active_connections":        snap["active_connections"],
+			"request_count":             st.TotalRequests,
+			"total_requests":            st.TotalRequests,
+			"streaming_connections":     st.StreamingCount,
+			"non_streaming_connections": st.NonStreamingCount,
+			"uptime":                    st.Uptime,
 		}
 		respondJSON(w, out)
 	})
@@ -65,7 +66,8 @@ func RegisterHandlers(mux *http.ServeMux, store *metrics.RingStore, tracker *met
 		respondJSON(w, data)
 	})
 
-	log.Println("dashboard: enabled — visit /_tap/dashboard")
+	var dashboardReady sync.Once
+	dashboardReady.Do(func() { log.Println("dashboard: enabled — visit /_tap/dashboard") })
 }
 
 func respondJSON(w http.ResponseWriter, v any) {

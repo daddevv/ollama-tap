@@ -35,8 +35,8 @@ func TestRingStore_History_AfterTicks(t *testing.T) {
 	store := NewRingStore(m, nil)
 	defer store.Stop()
 
-	// Let a few ticks happen
-	time.Sleep(12 * time.Second)
+	// Trigger a tick so history has data
+	store.Tick()
 
 	m.RecordRequest(10*time.Millisecond, false)
 
@@ -75,7 +75,7 @@ func TestRingStore_History_ManyMinutes(t *testing.T) {
 	store := NewRingStore(m, nil)
 	defer store.Stop()
 
-	time.Sleep(12 * time.Second)
+	store.Tick()
 
 	// Large minute value — should not exceed ring buffer size
 	hist := store.History(60)
@@ -116,7 +116,7 @@ func TestRingStore_History_StructuralIntegrity(t *testing.T) {
 	store := NewRingStore(m, nil)
 	defer store.Stop()
 
-	time.Sleep(8 * time.Second)
+	store.Tick()
 
 	hist := store.History(10)
 	if len(hist) == 0 {

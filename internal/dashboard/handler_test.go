@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/daddevv/ollama-tap/internal/metrics"
 )
@@ -60,7 +59,7 @@ func TestSnapshotEndpoint(t *testing.T) {
 	defer store.Stop()
 
 	// Trigger a tick so snapshot has data
-	time.Sleep(6 * time.Second)
+	store.Tick()
 
 	mux := http.NewServeMux()
 	RegisterHandlers(mux, store, tracker, m)
@@ -93,7 +92,7 @@ func TestHistoryEndpoint(t *testing.T) {
 	defer store.Stop()
 
 	// Trigger a tick
-	time.Sleep(6 * time.Second)
+	store.Tick()
 
 	mux := http.NewServeMux()
 	RegisterHandlers(mux, store, tracker, m)
@@ -127,7 +126,7 @@ func TestHistoryEndpoint_DefaultMinutes(t *testing.T) {
 	store := metrics.NewRingStore(m, tracker)
 	defer store.Stop()
 
-	time.Sleep(6 * time.Second)
+	store.Tick()
 
 	mux := http.NewServeMux()
 	RegisterHandlers(mux, store, tracker, m)
@@ -148,7 +147,7 @@ func TestHistoryEndpoint_InvalidMinutes(t *testing.T) {
 	store := metrics.NewRingStore(m, tracker)
 	defer store.Stop()
 
-	time.Sleep(6 * time.Second)
+	store.Tick()
 
 	mux := http.NewServeMux()
 	RegisterHandlers(mux, store, tracker, m)

@@ -29,13 +29,13 @@ type snapshotSlot struct {
 
 // HistoryEntry is a delta snapshot suitable for chart rendering.
 type HistoryEntry struct {
-	Label          string    `json:"label"`
-	Timestamp      time.Time `json:"timestamp"`
-	TotalReqs      int64     `json:"total_reqs_delta"`
-	Streaming      int64     `json:"streaming_delta"`
-	NonStreaming   int64     `json:"non_streaming_delta"`
-	Failures       int64     `json:"failures_delta"`
-	Successful     int64     `json:"successful_delta"`
+	Label        string    `json:"label"`
+	Timestamp    time.Time `json:"timestamp"`
+	TotalReqs    int64     `json:"total_reqs_delta"`
+	Streaming    int64     `json:"streaming_delta"`
+	NonStreaming int64     `json:"non_streaming_delta"`
+	Failures     int64     `json:"failures_delta"`
+	Successful   int64     `json:"successful_delta"`
 }
 
 // ModelData captures per-model token usage at a snapshot point.
@@ -91,6 +91,12 @@ func (s *RingStore) tick() {
 // Stop halts the ticker goroutine. Call on shutdown.
 func (s *RingStore) Stop() {
 	close(s.stopped)
+}
+
+// Tick records a snapshot of the current metrics into the ring buffer.
+// Useful for tests that need to trigger ticks synchronously rather than waiting for the ticker.
+func (s *RingStore) Tick() {
+	s.tick()
 }
 
 // Snapshot returns the latest snapshot data as a dashboard-friendly map.
