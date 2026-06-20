@@ -83,6 +83,72 @@ func toMillis(n json.Number) float64 {
 	return f / 1e6 // nanoseconds -> milliseconds
 }
 
+// OllamaSSEUsage holds usage stats from an SSE event that uses native
+// Ollama nanosecond fields (prompt_ns / completion_ns).
+type OllamaSSEUsage struct {
+    PromptTokens     int64
+    CompletionTokens int64
+}
+
+// ParseOllamaSSEUsage extracts usage from a JSON data object. It handles both
+// OpenAI-compatible field names (prompt_tokens, completion_tokens) and native
+// Ollama nanosecond fields (prompt_ns, completion_ns).  Returns nil when no
+// usable values are found so the caller can distinguish "no usage" from "all zeroes".
+func ParseOllamaSSEUsage(obj map[string]json.RawMessage) *OllamaSSEUsage {
+    var inner struct {
+        PromptTokens   *json.Number `json:"prompt_tokens"`
+        CompletionTokens *json.Number `json:"completion_tokens"`
+        PromptNs       *json.Number `json:"prompt_ns"`
+        CompletionNs   *json.Number `json:"completion_ns"`
+    }
+
+    // 1) Check if there is a wrapped "usage" object.
+    for k, v := range obj {
+        if k != "usage" {
+            continue
+        }
+        var usage struct {
+            PromptTokens   *json.Number `json:"prompt_tokens"`
+            CompletionTokens *json.Number `json:"completion_tokens"`
+            PromptNs       *json.Number `json:"prompt_ns"`
+            CompletionNs   *json.Number `json:"completion_ns"`
+        }
+        if err := json.Unmarshal(v, &usage); err != nil {
+            continue
+        }
+        inner.PromptTokens = usage.PromptTokens
+        inner.CompletionTokens = usage.CompletionTokens
+        inner.PromptNs = usage.PromptNs
+        inner.CompletionNs = usage.CompletionNs
+    }
+
+    u := &OllamaSSEUsage{}
+    // Try OpenAI-compatible field names first.
+    if inner.PromptTokens != nil {
+        f, _ := inner.PromptTokens.Float64()
+        u.PromptTokens = int64(f)
+    }
+    if inner.CompletionTokens != nil {
+        f, _ := inner.CompletionTokens.Float64()
+        u.CompletionTokens = int64(f)
+    }
+    // Fallback to native Ollama nanosecond fields when OpenAI fields are absent.
+    if u.PromptTokens == 0 && inner.PromptNs != nil {
+        f, _ := inner.PromptNs.Float64()
+        u.PromptTokens = int64(f)
+    }
+    if u.CompletionTokens == 0 && inner.CompletionNs != nil {
+        f, _ := inner.CompletionNs.Float64()
+        u.CompletionTokens = int64(f)
+    }
+
+    // Return nil only when we found absolutely nothing.
+    if u.PromptTokens == 0 && u.CompletionTokens == 0 {
+        return nil
+    }
+    return u
+}
+
 // OpenAIUsage holds usage stats from an OpenAI-compatible API response.
 type OpenAIUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`

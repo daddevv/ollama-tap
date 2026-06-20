@@ -53,7 +53,6 @@ func RegisterHandlers(mux *http.ServeMux, store *metrics.RingStore, tracker *met
 			"timestamp":                 snap["timestamp"],
 			"active_connections":        snap["active_connections"],
 			"active_streaming_connections": st.ActiveStreaming,
-			"request_count":             st.TotalRequests,
 			"total_requests":            st.TotalRequests,
 			"failed_requests":           st.Failures,
 			"streaming_connections":     st.StreamingCount,

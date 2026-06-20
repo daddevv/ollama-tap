@@ -240,3 +240,47 @@ func TestParseResponsesModel(t *testing.T) {
 		t.Errorf("expected empty model, got %q", got2)
 	}
 }
+
+func TestParseOllamaSSEUsage(t *testing.T) {
+	t.Run("openai-compatible fields", func(t *testing.T) {
+		obj := map[string]json.RawMessage{
+			"usage": json.RawMessage(`{"prompt_tokens":10,"completion_tokens":42}`),
+		}
+		u := ParseOllamaSSEUsage(obj)
+		if u == nil {
+			t.Fatal("expected usage")
+		}
+		if u.PromptTokens != 10 {
+			t.Errorf("prompt_tokens = %d, want 10", u.PromptTokens)
+		}
+		if u.CompletionTokens != 42 {
+			t.Errorf("completion_tokens = %d, want 42", u.CompletionTokens)
+		}
+	})
+
+	t.Run("native nanosecond fields", func(t *testing.T) {
+		obj := map[string]json.RawMessage{
+			"usage": json.RawMessage(`{"prompt_ns":100,"completion_ns":42}`),
+		}
+		u := ParseOllamaSSEUsage(obj)
+		if u == nil {
+			t.Fatal("expected usage")
+		}
+		if u.PromptTokens != 100 {
+			t.Errorf("prompt_tokens = %d, want 100", u.PromptTokens)
+		}
+		if u.CompletionTokens != 42 {
+			t.Errorf("completion_tokens = %d, want 42", u.CompletionTokens)
+		}
+	})
+
+	t.Run("no usage field", func(t *testing.T) {
+		obj := map[string]json.RawMessage{
+			"choices": json.RawMessage(`[{"delta":{"content":"hi"}}]`),
+		}
+		u := ParseOllamaSSEUsage(obj)
+		if u != nil {
+			t.Errorf("expected nil usage, got %+v", u)
+		}
+	})
+}

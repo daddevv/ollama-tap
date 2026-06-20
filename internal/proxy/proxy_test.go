@@ -372,7 +372,7 @@ data: [DONE]`
 
 	var buf bytes.Buffer
 	_, rw, fl := newBufWriter(&buf)
-	model := p.handleSSE(context.Background(), strings.NewReader(sseInput), rw, fl, "sse-test")
+	model := p.handleSSEPassthrough(context.Background(), strings.NewReader(sseInput), rw, fl, "sse-test", "")
 
 	_ = model // model may be empty for /v1/chat format
 	outStr := buf.String()
@@ -395,7 +395,7 @@ data: {"model":"qwen3.6","content":[], "done":true,"usage":{"prompt_tokens":1,"c
 
 	var buf bytes.Buffer
 	_, rw, fl := newBufWriter(&buf)
-	model := p.handleSSE(context.Background(), strings.NewReader(sseInput), rw, fl, "resp-test")
+	model := p.handleSSEPassthrough(context.Background(), strings.NewReader(sseInput), rw, fl, "resp-test", "")
 
 	if model != "qwen3.6" {
 		t.Errorf("model = %q, want qwen3.6", model)
@@ -422,7 +422,7 @@ data: [DONE]`
 				t.Errorf("handleSSE panicked on array data: %v", r)
 			}
 		}()
-		p.handleSSE(context.Background(), strings.NewReader(sseInput), rw, fl, "arr-test")
+		p.handleSSEPassthrough(context.Background(), strings.NewReader(sseInput), rw, fl, "arr-test", "")
 	}()
 
 	outStr := buf.String()
@@ -443,7 +443,7 @@ data: [DONE]`
 
 	func() {
 		defer func() { recover() }()
-		p.handleSSE(context.Background(), strings.NewReader(sseInput), rw, fl, "eoln-test")
+		p.handleSSEPassthrough(context.Background(), strings.NewReader(sseInput), rw, fl, "eoln-test", "")
 	}()
 
 	lines := strings.Split(buf.String(), "\n")
@@ -462,7 +462,7 @@ func TestSSEStreamEmptyBody(t *testing.T) {
 	p, _ := newTestProxy(t)
 	var buf bytes.Buffer
 	_, rw, fl := newBufWriter(&buf)
-	model := p.handleSSE(context.Background(), strings.NewReader(""), rw, fl, "empty-test")
+	model := p.handleSSEPassthrough(context.Background(), strings.NewReader(""), rw, fl, "empty-test", "")
 	if model != "" {
 		t.Errorf("model = %q, want empty", model)
 	}
@@ -481,7 +481,7 @@ func TestSSEStreamLargeChunk(t *testing.T) {
 
 	func() {
 		defer func() { recover() }()
-		p.handleSSE(context.Background(), strings.NewReader(line), rw, fl, "big-test")
+		p.handleSSEPassthrough(context.Background(), strings.NewReader(line), rw, fl, "big-test", "")
 	}()
 
 	if !strings.Contains(buf.String(), longContent[:10]) {
@@ -500,7 +500,7 @@ data: {"id":"c1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"promp
 
 	func() {
 		defer func() { recover() }()
-		p.handleSSE(context.Background(), strings.NewReader(sseInput), rw, fl, "usage-test")
+		p.handleSSEPassthrough(context.Background(), strings.NewReader(sseInput), rw, fl, "usage-test", "")
 	}()
 
 	outStr := buf.String()
@@ -523,7 +523,7 @@ data: [DONE]`
 
 	func() {
 		defer func() { recover() }()
-		p.handleSSE(context.Background(), strings.NewReader(sseInput), rw, fl, "non-data-test")
+		p.handleSSEPassthrough(context.Background(), strings.NewReader(sseInput), rw, fl, "non-data-test", "")
 	}()
 
 	outStr := buf.String()
