@@ -36,6 +36,15 @@ func RegisterHandlers(mux *http.ServeMux, store *metrics.RingStore, tracker *met
 	mux.HandleFunc("/_tap/dashboard/api/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		snap := store.Snapshot()
 		st := m.Snapshot()
+
+		// Sum token totals from all models.
+		var totalPromptTokens, totalCompletionTokens int64
+		trackerSnapshot := tracker.Snapshot()
+		for _, u := range trackerSnapshot {
+			totalPromptTokens += u.PromptTokens
+			totalCompletionTokens += u.CompletionTokens
+		}
+
 		out := map[string]interface{}{
 			"timestamp":                 snap["timestamp"],
 			"active_connections":        snap["active_connections"],
@@ -44,6 +53,10 @@ func RegisterHandlers(mux *http.ServeMux, store *metrics.RingStore, tracker *met
 			"streaming_connections":     st.StreamingCount,
 			"non_streaming_connections": st.NonStreamingCount,
 			"uptime":                    st.Uptime,
+			// Token totals across all models.
+			"total_prompt_tokens":       totalPromptTokens,
+			"total_completion_tokens":   totalCompletionTokens,
+			"total_tokens":              totalPromptTokens + totalCompletionTokens,
 		}
 		respondJSON(w, out)
 	})

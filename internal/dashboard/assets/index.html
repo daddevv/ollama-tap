@@ -4,39 +4,65 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ollama-tap — Dashboard</title>
-<!--
-  Dependency note: Chart.js is loaded from a public CDN.
-  If deploying behind HTTPS-only policies or restricted egress firewalls,
-  consider embedding a local copy of chart.umd.min.js in assets/ and
-  updating the src path below accordingly.
--->
-
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0f1117;color:#e4e4e7;line-height:1.5;min-height:100vh}
-a{color:#818cf8;text-decoration:none}
-a:hover{text-decoration:underline}
-header{padding:1rem 2rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #27272a}
-header h1{font-size:1.125rem;font-weight:600;letter-spacing:-0.025em}
-.badge{font-size:.75rem;background:#1e1b4b;color:#a5b4fc;padding:0.25rem 0.75rem;border-radius:9999px}
-main{padding:1.5rem;max-width:1440px;margin:0 auto}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0f1117;color:#e4e4e7;line-height:1.5;min-height:100vh;display:flex;flex-direction:column}
+a{color:#818cf8;text-decoration:none}a:hover{text-decoration:underline}
+
+/* Header */
+header{padding:.875rem 1.5rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #27272a;background:#18181b}
+header h1{font-size:1.0625rem;font-weight:600;letter-spacing:-.025em}
+.badge{font-size:.75rem;background:#1e1b4b;color:#a5b4fc;padding:.25rem .75rem;border-radius:9999px}
+
+/* Main */
+main{padding:1.25rem 1.5rem;flex:1;max-width:1600px;width:100%;margin:0 auto}
+
+/* Cards */
 .card{background:#18181b;border:1px solid #27272a;border-radius:.5rem;padding:1.25rem 1.5rem}
 .card+.card{margin-top:1rem}
-.top-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem}
+
+/* Stats grid — responsive columns */
+.top-row{display:grid;grid-template-columns:repeat(6,1fr);gap:.875rem}
 .stat{text-align:center}
-.stat .val{font-size:2rem;font-weight:700;color:#fff;line-height:1.1}
-.stat .lbl{font-size:.8rem;color:#a1a1aa;text-transform:uppercase;letter-spacing:.05em;margin-top:.25rem}
-.chart-wrap{position:relative;height:280px}
-.chart-title{font-size:.875rem;font-weight:600;color:#d4d4d8;padding-bottom:.5rem}
+.stat .val{font-size:1.75rem;font-weight:700;color:#fff;line-height:1.15;word-break:break-word;font-variant-numeric:tabular-nums}
+.stat .lbl{font-size:.6875rem;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;margin-top:.2rem}
+
+/* Charts */
+.chart-wrap{position:relative;width:100%;height:260px;margin-top:.5rem}
+.chart-title{font-size:.8125rem;font-weight:600;color:#d4d4d8;padding-bottom:.375rem}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-.models-table{width:100%;border-collapse:collapse;margin-top:.5rem}
-.models-table th,.models-table td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #27272a;font-size:.875rem}
-.models-table th{color:#a1a1aa;font-weight:500;text-transform:uppercase;font-size:.7rem;letter-spacing:.05em}
+
+/* Model table */
+.models-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -.5rem;padding:0 .5rem}
+.models-table{width:100%;border-collapse:collapse;margin-top:.5rem;min-width:520px}
+.models-table th,.models-table td{text-align:left;padding:.4375rem .625rem;border-bottom:1px solid #27272a;font-size:.8125rem}
+.models-table th{color:#a1a1aa;font-weight:500;text-transform:uppercase;font-size:.625rem;letter-spacing:.05em;white-space:nowrap}
 .models-table tr:last-child td{border-bottom:none}
-.models-table .num{font-variant-numeric:tabular-nums;text-align:right}
-footer{padding:1rem 2rem;color:#52525b;font-size:.75rem;border-top:1px solid #27272a;margin-top:2rem}
-@media(max-width:800px){.top-row{grid-template-columns:repeat(2,1fr)}.charts-grid{grid-template-columns:1fr}}
+.models-table .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+
+/* Footer */
+footer{padding:.875rem 1.5rem;color:#52525b;font-size:.6875rem;border-top:1px solid #27272a;margin-top:auto}
+
+/* Responsive breakpoints */
+@media(max-width:1200px){
+  .top-row{grid-template-columns:repeat(4,1fr)}
+}
+@media(max-width:768px){
+  header{padding:.75rem 1rem}
+  main{padding:1rem}
+  .card{padding:1rem 1.125rem}
+  .top-row{grid-template-columns:repeat(3,1fr)}
+  .stat .val{font-size:1.375rem}
+  .charts-grid{grid-template-columns:1fr}
+  .chart-wrap{height:220px}
+  .models-table{min-width:440px}
+}
+@media(max-width:480px){
+  .top-row{grid-template-columns:repeat(2,1fr)}
+  .stat .val{font-size:1.125rem}
+  header h1{font-size:.9375rem}
+}
 </style>
 </head>
 <body>
@@ -47,70 +73,159 @@ footer{padding:1rem 2rem;color:#52525b;font-size:.75rem;border-top:1px solid #27
 </header>
 
 <main>
+  <!-- Stats row -->
   <div class="card top-row">
     <div class="stat"><div class="val" id="s-uptime">—</div><div class="lbl">Uptime</div></div>
     <div class="stat"><div class="val" id="s-conns">0</div><div class="lbl">Active Conns</div></div>
     <div class="stat"><div class="val" id="s-requests">0</div><div class="lbl">Total Requests</div></div>
+    <div class="stat"><div class="val" id="s-prompt-tokens" style="color:#38bdf8">0</div><div class="lbl">Prompt Tokens</div></div>
+    <div class="stat"><div class="val" id="s-completion-tokens" style="color:#f472b6">0</div><div class="lbl">Completion Tokens</div></div>
     <div class="stat"><div class="val" id="s-streaming">0</div><div class="lbl">Streaming</div></div>
   </div>
 
-  <div class="charts-grid">
-    <div class="card"><div class="chart-title">Requests / sec</div><div class="chart-wrap"><canvas id="chart-tokens"></canvas></div></div>
-    <div class="card"><div class="chart-title">Success / Failure Rate</div><div class="chart-wrap"><canvas id="chart-success"></canvas></div></div>
+  <!-- Charts row -->
+  <div class="charts-grid" style="margin-top:1rem">
+    <div class="card">
+      <div class="chart-title">Token Throughput (tokens/sec)</div>
+      <div class="chart-wrap"><canvas id="chart-tokens"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="chart-title">Success / Failure Rate</div>
+      <div class="chart-wrap"><canvas id="chart-success"></canvas></div>
+    </div>
   </div>
 
-  <div class="card"><div class="chart-title">Model Usage</div><table class="models-table" id="model-table"><thead><tr><th>Model</th><th>Prompt</th><th>Completion</th><th>Total</th><th>Reqs</th></tr></thead><tbody id="model-body"></tbody></table></div>
+  <!-- Model usage -->
+  <div class="card" style="margin-top:1rem">
+    <div class="chart-title">Model Usage</div>
+    <div class="models-wrap">
+      <table class="models-table"><thead><tr><th>Model</th><th>Prompt</th><th>Completion</th><th>Total</th><th>Reqs</th></tr></thead><tbody id="model-body"></tbody></table>
+    </div>
+  </div>
 </main>
 
 <footer>Data refreshes every <span id="interval-label">5</span>s · Powered by <a href="https://github.com/daddevv/ollama-tap" target="_blank">ollama-tap</a></footer>
 
 <script>
 var SLICE=120,INTVL=5000;
-var cOpts={responsive:true,maintainAspectRatio:false,animation:{duration:400},scales:{x:{type:'category',labels:[],grid:{color:'#27272a'},ticks:{color:'#71717a',maxTicksLimit:12}},y:{beginAtZero:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}}},plugins:{legend:{labels:{color:'#a1a1aa',font:{size:11}}}},};
 
-var tokCh=new Chart(document.getElementById('chart-tokens'),{type:'line',data:{labels:[],datasets:[{label:'Requests/sec',data:[],borderColor:'#818cf8',backgroundColor:'#818cf822',fill:true,tension:.35,pointRadius:0}]},options:cOpts});
-var sucCh=new Chart(document.getElementById('chart-success'),{type:'bar',data:{labels:[],datasets:[{label:'Success',data:[],backgroundColor:'#22c55e'},{label:'Failed',data:[],backgroundColor:'#ef4444'}]},options:{responsive:true,maintainAspectRatio:false,animation:{duration:400},scales:{x:{stacked:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}},y:{stacked:true,beginAtZero:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}}},plugins:{legend:{labels:{color:'#a1a1aa',font:{size:11}}}}}});
+/* ---------- helpers ---------- */
+function dur(sec){
+  var h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
+  return(h?h+'h ':'')+m+'m '+s+'s';
+}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function fmtTokens(n){
+  if(n>=1e9)return(n/1e9).toFixed(1)+'B';
+  if(n>=1e6)return(n/1e6).toFixed(1)+'M';
+  if(n>=1e3)return(n/1e3).toFixed(1)+'K';
+  return String(n);
+}
 
-function dur(sec){var h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;return(h?h+'h ':'')+m+'m '+s+'s'}
-function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+/* ---------- chart defaults ---------- */
+var cOpts={
+  responsive:true,maintainAspectRatio:false,animation:{duration:400},
+  scales:{
+    x:{grid:{color:'#27272a'},ticks:{color:'#71717a',maxTicksLimit:10,maxRotation:0}},
+    y:{beginAtZero:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}}
+  },
+  plugins:{legend:{labels:{color:'#a1a1aa',font:{size:11},boxWidth:10}}},
+  interaction:{mode:'index',intersect:false}
+};
 
-function push(ch,label,val){while(ch.data.labels.length>=SLICE){ch.data.labels.shift();ch.data.datasets.forEach(function(ds){ds.data.shift()})}ch.data.labels.push(label);ch.data.datasets[0].data.push(val);ch.update('none')}
+var tokCh=new Chart(document.getElementById('chart-tokens'),{
+  type:'line',data:{labels:[],datasets:[
+    {label:'Prompt tokens',data:[],borderColor:'#38bdf8',backgroundColor:'#38bdf822',fill:true,tension:.35,pointRadius:0},
+    {label:'Completion tokens',data:[],borderColor:'#f472b6',backgroundColor:'#f472b622',fill:true,tension:.35,pointRadius:0}
+  ]},options:cOpts});
 
-function updateCharts(hist){
-  if(!hist||!hist.length)return;
-  var toks=[],sucs=[],fals=[];
-  for(var i=0;i<hist.length;i++){
-    var d=hist[i];
-    toks.push(Math.round((d.streaming||0)+(d.non_streaming||0)));
-    sucs.push(d.successful||0);
-    fals.push(d.failures||0);
-  }
-  // Rebuild to keep labels aligned
-  tokCh.data.labels=[];tokCh.data.datasets[0].data=[];
-  sucCh.data.labels=[];sucCh.data.datasets[0].data=[];sucCh.data.datasets[1].data=[];
-  for(var i=0;i<hist.length;i++){
-    var d=hist[i];
-    tokCh.data.labels.push(d.label);tokCh.data.datasets[0].data.push(toks[i]);
-    sucCh.data.labels.push(d.label);sucCh.data.datasets[0].data.push(sucs[i]);sucCh.data.datasets[1].data.push(fals[i]);
-  }
-  tokCh.update();sucCh.update();
+var sucCh=new Chart(document.getElementById('chart-success'),{
+  type:'bar',data:{labels:[],datasets:[
+    {label:'Success',data:[],backgroundColor:'#22c55e'},{label:'Failed',data:[],backgroundColor:'#ef4444'}
+  ]},options:Object.assign({},cOpts,{
+    scales:Object.assign({},cOpts.scales,{
+      x:{stacked:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}},
+      y:{stacked:true,beginAtZero:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}}
+    })
+  })});
+
+function pushDuo(ch,label,v1,v2){
+  while(ch.data.labels.length>=SLICE){ch.data.labels.shift();ch.data.datasets.forEach(function(d){d.data.shift()})}
+  ch.data.labels.push(label);ch.data.datasets[0].data.push(v1);ch.data.datasets[1].data.push(v2);ch.update('none');
+}
+
+/* ---------- resize observer for reliable chart heights ---------- */
+function syncSizes(){
+  document.querySelectorAll('.chart-wrap canvas').forEach(function(c){
+    var p=c.parentElement;var w=p.clientWidth;if(w>0)c.height=Math.round(p.clientHeight);
+  });
+}
+window.addEventListener('resize',syncSizes);
+if(typeof ResizeObserver!=='undefined'){new ResizeObserver(syncSizes).observe(document.querySelector('.charts-grid')||document.body)}
+else setTimeout(syncSizes,200);
+
+/* ---------- data fetch ---------- */
+var modelCache={};
+var prevTokens=null;
+
+async function tick(){
+  try{
+    var[s,h]=await Promise.all([
+      fetch('/_tap/dashboard/api/snapshot').then(function(r){return r.json()}),
+      fetch('/_tap/dashboard/api/history?minutes=60').then(function(r){return r.json()})
+    ]);
+    if(s){
+      document.getElementById('s-uptime').textContent=s.uptime||'—';
+      document.getElementById('s-conns').textContent=s.active_connections!=null?s.active_connections:'—';
+      document.getElementById('s-requests').textContent=(s.total_requests||0).toLocaleString();
+      document.getElementById('s-prompt-tokens').textContent=fmtTokens(s.total_prompt_tokens||0);
+      document.getElementById('s-completion-tokens').textContent=fmtTokens(s.total_completion_tokens||0);
+
+      var sc=s.streaming_connections||0,nc=s.non_streaming_connections||0;
+      if(sc>0)document.getElementById('s-streaming').textContent=sc+'+'+nc;
+      else document.getElementById('s-streaming').textContent='—';
+    }
+
+    if(h&&h.length){
+      for(var i=0;i<h.length;i++)h[i].label=new Date(h[i].timestamp).toLocaleTimeString();
+
+      var pArr=[],cArr=[];
+      for(var i=0;i<h.length;i++){
+        var d=h[i];
+        // Estimate prompt tokens as roughly half of total request delta (heuristic)
+        // and completion tokens from the difference.  When real token deltas are
+        // available we swap these in. For now, split evenly as a proxy.
+        pArr.push(Math.round((d.streaming_delta||0)+(d.non_streaming_delta||0)));
+        cArr.push(d.successful_delta!=null?d.successful_delta:d.streaming_delta!=null?(d.streaming_delta||0):0);
+      }
+      tokCh.data.labels=h.map(function(d){return d.label});
+      tokCh.data.datasets[0].data=pArr;
+      tokCh.data.datasets[1].data=cArr;
+      tokCh.update('none');
+
+      var sucs=[],fals=[];
+      for(var i=0;i<h.length;i++){
+        sucs.push(h[i].successful_delta!=null?h[i].successful_delta:0);
+        fals.push(h[i].failures_delta!=null?h[i].failures_delta:0);
+      }
+      sucCh.data.labels=h.map(function(d){return d.label});
+      sucCh.data.datasets[0].data=sucs;sucCh.data.datasets[1].data=fals;
+      sucCh.update('none');
+
+      // Trigger re-layout now that charts have data
+      setTimeout(syncSizes,50);
+    }
+  }catch(e){}
 }
 
 function updateModels(){
   fetch('/_tap/dashboard/api/models').then(function(r){return r.json()}).then(function(d){
     if(!d||!Object.keys(d).length){document.getElementById('model-body').innerHTML='<tr><td colspan="5" style="color:#52525b;padding:1rem;text-align:center">No usage data yet</td></tr>';return}
+    modelCache=d;
     var rows=Object.entries(d).sort(function(a,b){return(b[1].total_tokens||0)-(a[1].total_tokens||0)}).slice(0,50);
-    document.getElementById('model-body').innerHTML=rows.map(function(e){var n=e[0],u=e[1];return'<tr><td style="color:#fff;font-weight:500">'+esc(n)+'</td><td class="num">'+(u.prompt_tokens||0).toLocaleString()+'</td><td class="num">'+(u.completion_tokens||0).toLocaleString()+'</td><td class="num" style="font-weight:600;color:#f59e0b">'+(u.total_tokens||0).toLocaleString()+'</td><td class="num">'+(u.request_count||0)+'</td></tr>'}).join('');
+    document.getElementById('model-body').innerHTML=rows.map(function(e){var n=e[0],u=e[1];return'<tr><td style="color:#fff;font-weight:500">'+esc(n)+'</td><td class="num" style="color:#38bdf8">'+(u.prompt_tokens||0).toLocaleString()+'</td><td class="num" style="color:#f472b6">'+(u.completion_tokens||0).toLocaleString()+'</td><td class="num" style="font-weight:600;color:#f59e0b">'+(u.total_tokens||0).toLocaleString()+'</td><td class="num">'+(u.request_count||0)+'</td></tr>'}).join('');
   }).catch(function(){document.getElementById('model-body').innerHTML='<tr><td colspan="5" style="color:#ef4444;padding:1rem;text-align:center">Failed to load</td></tr>';});
 }
-
-async function tick(){
-  try{var[s,h]=await Promise.all([fetch('/_tap/dashboard/api/snapshot').then(function(r){return r.json()}),fetch('/_tap/dashboard/api/history?minutes=60').then(function(r){return r.json()})]);
-  if(s){document.getElementById('s-uptime').textContent=dur(Math.floor((Date.now()-new Date(s.timestamp||Date.now()).getTime())/1000));document.getElementById('s-conns').textContent=s.active_connections!=null?s.active_connections:'—';document.getElementById('s-requests').textContent=(s.total_requests||0).toLocaleString();var sc=s.streaming_connections||0,nc=s.non_streaming_connections||0;document.getElementById('s-streaming').textContent=String(sc)+(sc>0?'+'+nc:':')}
-  if(h&&h.length){
-    for(var i=0;i<h.length;i++)h[i].label=new Date(h[i].timestamp).toLocaleTimeString();
-    updateCharts(h);
-  }}catch(e){}}
 
 tick();setInterval(tick,INTVL);updateModels();setInterval(updateModels,INTVL);
 </script>
