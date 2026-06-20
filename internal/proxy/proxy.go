@@ -150,7 +150,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// streamFmt will be set when we need format-specific streaming handling
 	var streamFmt streamFormat
 	isUpstreamStreaming := isStreamResponse(resp)
-	if !isUpstreamStreaming && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate") {
+	if !isUpstreamStreaming && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/generate") {
 		isUpstreamStreaming = isRequestStream(r.URL.Path, bodyBytes)
 	}
 
@@ -380,8 +380,8 @@ func detectStreamFormat(resp *http.Response, reqPath string, reqBody []byte) str
 	}
 
 	// 3. Fallback: if the request explicitly asks for streaming, assume NDJSON
-	//    (Ollama's /api/chat and /api/generate endpoints return NDJSON).
-	if reqPath == "/api/chat" || reqPath == "/api/generate" {
+	//    (Ollama native and OpenAI-compatible paths return NDJSON when Content-Type is ambiguous).
+	if reqPath == "/api/chat" || reqPath == "/api/generate" || reqPath == "/v1/chat/completions" || reqPath == "/v1/generate" {
 		return formatNDJSON
 	}
 
@@ -434,7 +434,7 @@ func isStreamResponse(resp *http.Response) bool {
 
 // isRequestStream checks if the request body explicitly sets stream=true.
 func isRequestStream(path string, body []byte) bool {
-	if !strings.Contains(path, "/api/generate") && !strings.Contains(path, "/api/chat") {
+	if !strings.Contains(path, "/api/generate") && !strings.Contains(path, "/api/chat") && !strings.Contains(path, "/v1/chat/completions") && !strings.Contains(path, "/v1/generate") {
 		return false
 	}
 	if len(body) == 0 {
@@ -628,7 +628,7 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 				})
 			}
 			if stats.Done == true {
-				p.recordModelUsage(model, 0, int64(stats.EvalCount))
+				p.recordModelUsage(model, int64(stats.PromptEval), int64(stats.EvalCount))
 			}
 		} else if p.cfg.CaptureStreamChunks {
 			chunks = append(chunks, &logging.StreamChunk{
