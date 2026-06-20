@@ -7,7 +7,7 @@ import (
 
 func TestRingStore_Snapshot_Early(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	store := NewRingStore(m, nil, "/tmp")
 	defer store.Stop()
 
 	snap := store.Snapshot()
@@ -21,7 +21,7 @@ func TestRingStore_Snapshot_Early(t *testing.T) {
 
 func TestRingStore_History_Early(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	store := NewRingStore(m, nil, "/tmp")
 	defer store.Stop()
 
 	hist := store.History(1)
@@ -34,7 +34,7 @@ func TestRingStore_History_AfterTicks(t *testing.T) {
 	m := New()
 	tracker := NewModelUsageTracker()
 	defer tracker.Stop()
-	store := NewRingStore(m, tracker)
+	store := NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	// Trigger a tick so history has data
@@ -77,7 +77,7 @@ func TestRingStore_History_AfterTicks(t *testing.T) {
 
 func TestRingStore_Stop(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	store := NewRingStore(m, nil, "/tmp")
 
 	store.Stop()
 
@@ -89,7 +89,7 @@ func TestRingStore_Stop(t *testing.T) {
 
 func TestRingStore_History_ManyMinutes(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	store := NewRingStore(m, nil, "/tmp")
 	defer store.Stop()
 
 	store.Tick()
@@ -103,7 +103,7 @@ func TestRingStore_History_ManyMinutes(t *testing.T) {
 
 func TestRingStore_History_ZeroMinutes(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	store := NewRingStore(m, nil, "/tmp")
 	defer store.Stop()
 
 	hist := store.History(0)
@@ -114,7 +114,7 @@ func TestRingStore_History_ZeroMinutes(t *testing.T) {
 
 func TestRingStore_ConcurrentTicks(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	store := NewRingStore(m, nil, "/tmp")
 	defer store.Stop()
 
 	for i := 0; i < 20; i++ {
@@ -133,7 +133,7 @@ func TestRingStore_ConcurrentTicks(t *testing.T) {
 
 func TestRingStore_History_StructuralIntegrity(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	store := NewRingStore(m, nil, "/tmp")
 	defer store.Stop()
 
 	store.Tick()
@@ -157,7 +157,7 @@ func TestRingStore_HistorySeries_CompressesToMaxPoints(t *testing.T) {
 	m := New()
 	tracker := NewModelUsageTracker()
 	defer tracker.Stop()
-	store := NewRingStore(m, tracker)
+	store := NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	store.Tick()
@@ -194,7 +194,7 @@ func TestRingStore_HistorySeries_CompressesToMaxPoints(t *testing.T) {
 
 func TestRingStore_NewReturnsNotNil(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	store := NewRingStore(m, nil, "/tmp")
 	if store == nil {
 		t.Fatal("NewRingStore returned nil")
 	}

@@ -14,7 +14,7 @@ import (
 func TestDashboardHandler(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	mux := http.NewServeMux()
@@ -37,7 +37,7 @@ func TestDashboardHandler(t *testing.T) {
 func TestDashboardHandler_NotFound(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	mux := http.NewServeMux()
@@ -57,7 +57,7 @@ func TestSnapshotEndpoint(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
 	defer tracker.Stop()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	// Trigger a tick so snapshot has data
@@ -108,7 +108,7 @@ func TestHistoryEndpoint(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
 	defer tracker.Stop()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	// Trigger a tick
@@ -156,7 +156,7 @@ func TestHistoryEndpoint(t *testing.T) {
 func TestHistoryEndpoint_DefaultMinutes(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	store.Tick()
@@ -178,7 +178,7 @@ func TestHistoryEndpoint_InvalidPoints(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
 	defer tracker.Stop()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	store.Tick()
@@ -198,7 +198,7 @@ func TestHistoryEndpoint_InvalidPoints(t *testing.T) {
 func TestHistoryEndpoint_InvalidMinutes(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	store.Tick()
@@ -219,7 +219,7 @@ func TestHistoryEndpoint_InvalidMinutes(t *testing.T) {
 func TestModelsEndpoint(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	// Record some usage
@@ -258,7 +258,7 @@ func TestModelsEndpoint(t *testing.T) {
 func TestModelsEndpoint_Empty(t *testing.T) {
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, "/tmp")
 	defer store.Stop()
 
 	mux := http.NewServeMux()

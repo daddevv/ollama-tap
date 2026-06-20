@@ -1,10 +1,18 @@
 package metrics
 
 import (
+	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+const historyFileName = "history.jsonl"
+const persistenceWindow = 2 * time.Hour
 
 // RingStore maintains a ring buffer of periodic snapshots of cumulative counters.
 type RingStore struct {
@@ -16,6 +24,8 @@ type RingStore struct {
 	mu       sync.RWMutex
 	upstream *Metrics
 	tracker  *ModelUsageTracker
+	logDir   string
+	persistFile *os.File
 }
 
 type snapshotSlot struct {
@@ -52,17 +62,34 @@ type ModelData struct {
 }
 
 // NewRingStore creates a RingStore backed by the given Metrics and ModelUsageTracker.
-// Buffer holds 24 hours of data at 5-second intervals (17,280 slots).
-func NewRingStore(m *Metrics, tracker *ModelUsageTracker) *RingStore {
+// Buffer holds 2 hours of data at 5-second intervals (1,440 slots).
+func NewRingStore(m *Metrics, tracker *ModelUsageTracker, logDir string) *RingStore {
 	s := &RingStore{
-		buffer:   make([]snapshotSlot, 17280), // 24h × 3600s / 5s = 17280 slots
-		size:     17280,
+		buffer:   make([]snapshotSlot, 1440), // 2h × 3600s / 5s = 1440 slots
+		size:     1440,
 		tickSec:  5,
 		stopped:  make(chan struct{}),
 		upstream: m,
 		tracker:  tracker,
+		logDir:   logDir,
 	}
-	s.head.Store(-1)
+
+	// Open (or create) the history file for persistence.
+	path := filepath.Join(logDir, historyFileName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("ollama-tap: persist: failed to open %s: %v", path, err)
+	} else {
+		s.persistFile = f
+	}
+
+	// Load persisted history to survive restarts.
+	entries, loadErr := loadHistory(logDir)
+	if loadErr == nil && len(entries) > 0 {
+		s.loadHistory(entries)
+	}
+
+	s.head.Store(int64(len(entries)) - 1)
 	go s.ticker()
 	return s
 }
@@ -88,9 +115,8 @@ func (s *RingStore) tick() {
 		totals = s.tracker.Totals()
 	}
 	idx := ((s.head.Add(1)+s.size)%s.size + s.size) % s.size
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.buffer[idx] = snapshotSlot{
+
+	slot := snapshotSlot{
 		timestamp:        time.Now().UTC(),
 		totalReqs:        m.totalRequests.Load(),
 		streaming:        int64(m.streamingCount.Load()),
@@ -100,11 +126,24 @@ func (s *RingStore) tick() {
 		promptTokens:     totals.PromptTokens,
 		completionTokens: totals.CompletionTokens,
 	}
+
+	s.mu.Lock()
+	s.buffer[idx] = slot
+	s.mu.Unlock()
+
+	// Persist to disk for durability across restarts.
+	if s.persistFile != nil {
+		data, err := json.Marshal(slot)
+		if err == nil {
+			s.persistFile.Write(append(data, byte(10)))
+		}
+	}
 }
 
-// Stop halts the ticker goroutine. Call on shutdown.
+// Stop halts the ticker goroutine and closes the persistence file. Call on shutdown.
 func (s *RingStore) Stop() {
 	close(s.stopped)
+	s.StopPersist()
 }
 
 // Tick records a snapshot of the current metrics into the ring buffer synchronously.
@@ -241,4 +280,69 @@ func (s *RingStore) HistorySeries(nMinutes, maxPoints int) []HistoryEntry {
 	}
 
 	return series
+}
+
+
+// loadHistory reads persisted snapshots from <logDir>/history.jsonl that fall within
+// the persistence window and returns them in chronological order.
+func loadHistory(logDir string) ([]snapshotSlot, error) {
+	path := filepath.Join(logDir, historyFileName)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := []string{}
+	for _, line := range strings.Split(string(content), "\n") {
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+
+	var all []snapshotSlot
+	for _, line := range lines {
+		var slot snapshotSlot
+		if err := json.Unmarshal([]byte(line), &slot); err != nil {
+			continue // skip corrupt entries
+		}
+		all = append(all, slot)
+	}
+
+	cutoff := time.Now().Add(-persistenceWindow)
+	var result []snapshotSlot
+	for _, s := range all {
+		if !s.timestamp.IsZero() && s.timestamp.After(cutoff) {
+			result = append(result, s)
+		}
+	}
+	return result, nil
+}
+
+// loadHistory fills the ring buffer with pre-loaded snapshot entries and updates head.
+func (s *RingStore) loadHistory(entries []snapshotSlot) {
+	if len(entries) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	slotLen := int64(len(s.buffer))
+	for i, e := range entries {
+		rawIdx := int64(i) % slotLen
+		e.timestamp = e.timestamp.UTC()
+		s.buffer[rawIdx] = e
+	}
+}
+
+// StopPersist flushes and closes the history file.
+func (s *RingStore) StopPersist() {
+	if s.persistFile != nil {
+		s.persistFile.Close()
+		s.persistFile = nil
+	}
+}
+
+// maxHistorySlots returns the maximum number of slots that fit in the ring buffer.
+func (s *RingStore) maxHistorySlots() int64 {
+	return s.size
 }

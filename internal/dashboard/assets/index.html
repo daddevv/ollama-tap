@@ -320,7 +320,7 @@ html { transition: color 0.35s ease, background-color 0.35s ease; }
       <div class="section-title">
         <div>
           <h2>Token throughput</h2>
-          <div class="chart-subtitle">Prompt and completion tokens per second across the selected 24-hour view.</div>
+          <div class="chart-subtitle">Prompt and completion tokens per second across the selected 2-hour window.</div>
         </div>
         <span id="throughput-points" class="muted">0 points</span>
       </div>
@@ -382,7 +382,7 @@ html { transition: color 0.35s ease, background-color 0.35s ease; }
 <script>
 (function () {
   var POLL_MS = 5000;
-  var HISTORY_MINUTES = 1440;
+  var HISTORY_MINUTES = 120;
   var HISTORY_POINTS = 288;
   var CONN_SPARK_LIMIT = 48;
   var sortState = { col: 'request_count', dir: 'desc' };

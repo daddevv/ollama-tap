@@ -28,7 +28,7 @@ func main() {
 
 	m := metrics.New()
 	tracker := metrics.NewModelUsageTracker()
-	store := metrics.NewRingStore(m, tracker)
+	store := metrics.NewRingStore(m, tracker, cfg.LogDir)
 	defer store.Stop()
 
 	p, err := proxy.NewWithTracker(cfg, m, tracker)

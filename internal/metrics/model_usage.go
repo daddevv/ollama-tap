@@ -30,11 +30,11 @@ type ModelUsageTracker struct {
 }
 
 // NewModelUsageTracker creates a tracker with the given max models and stale threshold.
-// A zero-value call defaults to 100 max models and 24h stale threshold.
+// A zero-value call defaults to 100 max models and 2h stale threshold.
 func NewModelUsageTracker() *ModelUsageTracker {
 	t := &ModelUsageTracker{
 		maxModels:      100,
-		staleThreshold: 24 * time.Hour,
+		staleThreshold: 2 * time.Hour,
 		cleanupTick:    5 * time.Minute,
 		stopCh:         make(chan struct{}),
 	}

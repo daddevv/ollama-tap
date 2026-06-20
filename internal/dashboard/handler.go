@@ -16,7 +16,7 @@ import (
 //go:embed assets
 var assets embed.FS
 
-const defaultHistoryMinutes = 1440 // 24 hours
+const defaultHistoryMinutes = 120 // 2 hours
 const defaultHistoryPoints = 288
 const maxHistoryPoints = 720
 
@@ -77,8 +77,8 @@ func RegisterHandlers(mux *http.ServeMux, store *metrics.RingStore, tracker *met
 				http.Error(w, fmt.Sprintf("invalid minutes value: %q", minutesStr), http.StatusBadRequest)
 				return
 			}
-			if val <= 0 || val > 1440 {
-				http.Error(w, "minutes must be between 1 and 1440", http.StatusBadRequest)
+			if val <= 0 || val > 120 {
+				http.Error(w, "minutes must be between 1 and 120", http.StatusBadRequest)
 				return
 			}
 			minutes = val
