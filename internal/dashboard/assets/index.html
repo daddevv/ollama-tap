@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
+<meta name="theme-color" id="theme-color-tag" content="#0d1117">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ollama-tap Dashboard</title>
@@ -89,6 +90,7 @@ a { color: inherit; }
   background: var(--surface); border: 1px solid var(--border); backdrop-filter: blur(18px); border-radius: 24px; box-shadow: var(--shadow);
 }
 .hero-main { padding: 26px; position: relative; overflow: hidden; }
+.brand:hover .brand-mark { transform: scale(1.05); transition: transform 0.2s ease; }
 .hero-main::after {
   content: ""; position: absolute; inset: auto -8% -40% auto; width: 260px; height: 260px; border-radius: 999px; background: radial-gradient(circle, var(--hero-a), transparent 68%); pointer-events: none;
 }
@@ -107,14 +109,15 @@ a { color: inherit; }
 .muted { color: var(--text-soft); }
 .score-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .score-card { padding: 16px; border-radius: 18px; background: var(--surface-muted); border: 1px solid var(--border); }
+.score-card:hover { background: var(--accent-soft); transition: background 0.2s ease, border-color 0.2s ease; }
 .score-card span { display: block; }
 .score-card .kicker { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft); margin-bottom: 8px; }
 .score-card .score { font-size: 1.45rem; font-weight: 800; letter-spacing: -0.05em; }
-.score-card .hint { margin-top: 6px; color: var(--text-soft); font-size: 0.82rem; }
+.score-card .hint { margin-top: 8px; color: var(--text-soft); font-size: 0.82rem; line-height: 1.35; }
 .stats-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
 .stat-card { padding: 18px; min-height: 132px; display: flex; flex-direction: column; justify-content: space-between; }
 .stat-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--text-soft); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; }
-.stat-icon { width: 32px; height: 32px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 800; }
+.stat-icon { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 0.78rem; }
 .stat-value { font-size: 1.9rem; font-weight: 800; letter-spacing: -0.06em; font-variant-numeric: tabular-nums; line-height: 1; }
 .stat-note { color: var(--text-soft); font-size: 0.84rem; }
 .stat-sparkline { position: relative; height: 34px; margin-top: 14px; }
@@ -131,7 +134,7 @@ table { width: 100%; border-collapse: collapse; }
 th, td { padding: 14px 12px; text-align: left; border-bottom: 1px solid var(--border); }
 th { color: var(--text-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer; user-select: none; }
 th.sorted::after { content: attr(data-indicator); margin-left: 6px; color: var(--accent); }
-tbody tr:hover { background: rgba(255,255,255,0.03); }
+tbody tr:hover { background: var(--accent-soft); }
 .model-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .top-row td:first-child { color: var(--gold); }
@@ -166,6 +169,12 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
   .stat-card { min-height: 116px; }
   .stat-value { font-size: 1.6rem; }
 }
+
+html { transition: color 0.35s ease, background-color 0.35s ease; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-soft); }
 </style>
 </head>
 <body>
@@ -487,7 +496,7 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
   }
 
   function renderSnapshot(snapshot, history) {
-    refs.uptime.textContent = snapshot.uptime || '--';
+    refs.uptime.textContent = uptimeLabel(snapshot.uptime || '--');
     refs.connections.textContent = formatNumber(snapshot.active_connections || 0);
     refs.requests.textContent = formatNumber(snapshot.total_requests || 0);
     refs.promptTokens.textContent = compactNumber(snapshot.total_prompt_tokens || 0);
@@ -667,6 +676,11 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
       document.documentElement.setAttribute('data-theme', next);
       localStorage.setItem('ollama-tap-theme', next);
       applyChartTheme();
+      var metaTag = document.getElementById("theme-color-tag");
+      if (metaTag) {
+        var bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+        metaTag.setAttribute("content", bg);
+      }
     });
   }
 
@@ -762,11 +776,16 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
   }
 
   function createConnectionSpark(canvas) {
+    var ctx = canvas.getContext("2d");
+    var colors = themeColors();
+    var gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 50);
+    gradient.addColorStop(0, colors.accent + "22");
+    gradient.addColorStop(1, colors.accent + "00");
     return new Chart(canvas, {
       type: 'line',
       data: {
         labels: [],
-        datasets: [{ data: [], borderColor: themeColors().accent, pointRadius: 0, tension: 0.35, borderWidth: 2, fill: false }]
+        datasets: [{ data: [], borderColor: colors.accent, backgroundColor: gradient, pointRadius: 0, tension: 0.35, borderWidth: 2, fill: true }]
       },
       options: {
         responsive: true,
@@ -866,6 +885,22 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
     var div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  function uptimeLabel(durationStr) {
+    if (!durationStr || durationStr === '--' || typeof durationStr !== 'string') return durationStr || '--';
+    var h = parseInt(durationStr.match(/(\d+)h/)?.[1] || '0', 10);
+    var m = parseInt(durationStr.match(/(\d+)m/)?.[1] || '0', 10);
+    var secs = durationStr.match(/(\d+(?:\.\d+)?)(s|ms)$/);
+    var s = secs ? Math.floor(parseFloat(secs[1])) : 0;
+    if (h > 24) {
+      var days = Math.floor(h / 24);
+      var remH = h % 24;
+      return remH > 0 || m > 0 ? days + 'd ' + remH + 'h' : days + 'd';
+    }
+    if (h > 0) return h + 'h ' + (m > 0 ? m + 'm' : s > 0 ? Math.floor(s) + 's' : '');
+    if (m > 0) return m + 'm ' + (s > 0 ? s + 's' : '');
+    return s + 's';
   }
 })();
 </script>

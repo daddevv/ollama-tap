@@ -196,8 +196,10 @@ func TestNDJSONStreamMultipleChunks(t *testing.T) {
 			dataLines = append(dataLines, strings.TrimPrefix(ln, "data: "))
 		}
 	}
-	if len(dataLines) != 4 { // 3 chunks + [DONE]
-		t.Fatalf("got %d SSE data lines, want 4", len(dataLines))
+	// With the P1 bug fix, done:true signal sets sawDoneMarker regardless of token count,
+	// so [DONE] is not sent separately (prevents double-signaling).
+	if len(dataLines) != 3 { // 3 chunks, no [DONE] since done:true was received
+		t.Fatalf("got %d SSE data lines, want 3", len(dataLines))
 	}
 	var last map[string]any
 	json.Unmarshal([]byte(dataLines[2]), &last)
@@ -227,8 +229,10 @@ func TestNDJSONStreamEmptyLines(t *testing.T) {
 			realLines = append(realLines, ln)
 		}
 	}
-	if len(realLines) != 3 {
-		t.Fatalf("got %d non-empty lines, want 3", len(realLines))
+	// With the P1 bug fix, done:true sets sawDoneMarker regardless of token count,
+	// so [DONE] is not sent separately. Expect only the 2 chunks, not [DONE].
+	if len(realLines) != 2 {
+		t.Fatalf("got %d non-empty lines, want 2 (no [DONE] since done:true was received)", len(realLines))
 	}
 }
 
@@ -467,7 +471,11 @@ func TestSSEStreamEmptyBody(t *testing.T) {
 		t.Errorf("model = %q, want empty", model)
 	}
 	if buf.Len() != 0 {
-		t.Errorf("expected empty output, got %q", buf.String())
+		// Empty stream should still send [DONE] to signal end of stream
+		expected := "data: [DONE]\n\n"
+		if buf.String() != expected {
+			t.Errorf("expected %q, got %q", expected, buf.String())
+		}
 	}
 }
 
@@ -943,9 +951,10 @@ func TestIntegrationNDJSONStreamForwarding(t *testing.T) {
 			dataLines = append(dataLines, strings.TrimPrefix(ln, "data: "))
 		}
 	}
-	// 3 chunks + [DONE] = 4 SSE data events.
-	if len(dataLines) != 4 {
-		t.Fatalf("got %d SSE data lines, want 4", len(dataLines))
+	// With P1 bug fix, done:true sets sawDoneMarker regardless of token count,
+	// so [DONE] is not sent separately. Expect 3 chunks, no separate [DONE].
+	if len(dataLines) != 3 {
+		t.Fatalf("got %d SSE data lines, want 3 (no [DONE] since done:true was received)", len(dataLines))
 	}
 	if !strings.Contains(dataLines[2], `"done":true`) && !strings.Contains(dataLines[2], `"eval_count":10`) {
 		t.Errorf("last content line should have done/eval_count: %s", dataLines[2])
@@ -1049,8 +1058,8 @@ func TestIntegrationNDJSONEmptyChunks(t *testing.T) {
 			nonEmpty++
 		}
 	}
-	if nonEmpty != 3 {
-		t.Errorf("expected 3 non-empty lines, got %d", nonEmpty)
+	if nonEmpty != 2 {
+		t.Errorf("expected 2 non-empty lines (no [DONE] since done:true was received), got %d", nonEmpty)
 	}
 }
 
@@ -1553,5 +1562,391 @@ func TestIntegrationSSETracksRequestModelWhenResponseOmitsModel(t *testing.T) {
 	}
 	if usage.CompletionTokens != 7 {
 		t.Fatalf("completion_tokens: got %d, want 7", usage.CompletionTokens)
+	}
+}
+
+func TestProxyNDJSONZeroTokensNotRecorded(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	p, err := NewWithTracker(&config.Config{LogDir: t.TempDir()}, metrics.New(), tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	ndjsonInput := `{"model":"llama3","content":"hello ","done":false}
+{"model":"llama3","done":true}` // No eval_count or prompt_eval_count
+
+	var buf bytes.Buffer
+	_, rw, fl := newBufWriter(&buf)
+	p.handleNDJSON(context.Background(), strings.NewReader(ndjsonInput), rw, fl, "test-id", "")
+
+	snap := tracker.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("expected tracker to have records (at least request count)")
+	}
+	u := snap["llama3"]
+	// Request count should be 1 but token counts must be zero
+	if u.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", u.RequestCount)
+	}
+	if u.PromptTokens != 0 || u.CompletionTokens != 0 || u.TotalTokens != 0 {
+		t.Fatal("expected zero token counts when Ollama omits eval fields")
+	}
+}
+
+func TestProxyNDJSONWithTokensRecorded(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	p, err := NewWithTracker(&config.Config{LogDir: t.TempDir()}, metrics.New(), tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	ndjsonInput := `{"model":"llama3","content":"hello ","done":false}
+{"model":"llama3","done":true,"eval_count":42,"prompt_eval_count":15}`
+
+	var buf bytes.Buffer
+	_, rw, fl := newBufWriter(&buf)
+	p.handleNDJSON(context.Background(), strings.NewReader(ndjsonInput), rw, fl, "test-id", "")
+
+	snap := tracker.Snapshot()
+	u := snap["llama3"]
+	if u.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", u.RequestCount)
+	}
+	if u.PromptTokens != 15 {
+		t.Fatalf("prompt_tokens: got %d, want 15", u.PromptTokens)
+	}
+	if u.CompletionTokens != 42 {
+		t.Fatalf("completion_tokens: got %d, want 42", u.CompletionTokens)
+	}
+	if u.TotalTokens != 57 {
+		t.Fatalf("total_tokens: got %d, want 57", u.TotalTokens)
+	}
+}
+
+func TestProxyNonStreamingZeroTokensNotRecorded(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "chat") || strings.Contains(r.URL.Path, "generate") {
+			w.Write([]byte(`{"model":"llama3","done":true}`)) // No eval fields
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	cfg := &config.Config{
+		ListenAddr: ":0", Upstream: mustParse(upstream.URL),
+		CaptureRequests: false, CaptureResponses: false, CaptureStreamChunks: false, LogDir: t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(p)
+	defer httpSrv.Close()
+
+	resp, err := http.Post(httpSrv.URL+"/api/chat", "application/json", strings.NewReader(`{"model":"llama3","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	snap := tracker.Snapshot()
+	u := snap["llama3"]
+	// Request count should be recorded but not token counts
+	if u.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", u.RequestCount)
+	}
+	if u.TotalTokens != 0 {
+		t.Fatalf("total_tokens should be 0 when response omits eval fields: got %d", u.TotalTokens)
+	}
+
+	// Also verify dashboard would show zeros for tokens but non-zero for requests
+	totals := tracker.Totals()
+	if totals.PromptTokens != 0 || totals.CompletionTokens != 0 {
+		t.Fatal("Totals() should be zero for prompt/completion when Ollama omits eval fields")
+	}
+}
+
+func TestProxySSEZeroTokensNotRecorded(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	p, err := NewWithTracker(&config.Config{LogDir: t.TempDir()}, metrics.New(), tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	// SSE stream with finish_reason but no usage object -> zero tokens should NOT be recorded
+	sseInput := `data: {"id":"c1","model":"qwen3.6","choices":[{"delta":{"content":"hello"},"index":0,"finish_reason":null}]}
+
+data: {"id":"c1","choices":[{"delta":{},"finish_reason":"stop","index":0}]}
+
+data: [DONE]
+`
+	var buf bytes.Buffer
+	_, rw, fl := newBufWriter(&buf)
+	p.handleSSEPassthrough(context.Background(), strings.NewReader(sseInput), rw, fl, "test-id", "")
+
+	snap := tracker.Snapshot()
+	u := snap["qwen3.6"]
+	if u.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", u.RequestCount)
+	}
+	if u.TotalTokens != 0 {
+		t.Fatalf("total_tokens should be 0 when SSE omits usage object: got %d", u.TotalTokens)
+	}
+}
+
+func TestProxySSEWithTokensRecorded(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	p, err := NewWithTracker(&config.Config{LogDir: t.TempDir()}, metrics.New(), tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	// SSE stream WITH usage object -> tokens SHOULD be recorded
+	sseInput := `data: {"id":"c1","model":"qwen3.6","choices":[{"delta":{"content":"hello"},"index":0,"finish_reason":null}]}
+
+data: {"id":"c1","choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":12,"completion_tokens":8}}
+`
+	var buf bytes.Buffer
+	_, rw, fl := newBufWriter(&buf)
+	p.handleSSEPassthrough(context.Background(), strings.NewReader(sseInput), rw, fl, "test-id", "")
+
+	snap := tracker.Snapshot()
+	u := snap["qwen3.6"]
+	if u.RequestCount < 1 {
+		t.Fatalf("request_count: got %d, want at least 1", u.RequestCount)
+	}
+	if u.PromptTokens != 12 {
+		t.Fatalf("prompt_tokens: got %d, want 12", u.PromptTokens)
+	}
+	if u.CompletionTokens != 8 {
+		t.Fatalf("completion_tokens: got %d, want 8", u.CompletionTokens)
+	}
+}
+
+func TestIntegrationNDJSONFullTokenTrackingFlow(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	// Mock Ollama streaming response with proper usage data
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, `{"model":"llama3","content":"hello ","done":false}`+"\n")
+		flusher.Flush()
+		fmt.Fprintf(w, `{"model":"llama3","content":"world!","done":false}`+"\n")
+		flusher.Flush()
+		fmt.Fprintf(w, `{"model":"llama3","done":true,"eval_count":42,"prompt_eval_count":15}`+"\n")
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		ListenAddr: ":0", Upstream: mustParse(upstream.URL),
+		CaptureRequests: false, CaptureResponses: false, CaptureStreamChunks: false, LogDir: t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(p)
+	defer httpSrv.Close()
+
+	reqBody := `{"model":"llama3","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	resp, err := http.Post(httpSrv.URL+"/api/chat", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	// Verify tracker has correct data
+	snap := tracker.Snapshot()
+	u := snap["llama3"]
+	if u.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", u.RequestCount)
+	}
+	if u.PromptTokens != 15 {
+		t.Fatalf("prompt_tokens: got %d, want 15", u.PromptTokens)
+	}
+	if u.CompletionTokens != 42 {
+		t.Fatalf("completion_tokens: got %d, want 42", u.CompletionTokens)
+	}
+	if u.TotalTokens != 57 {
+		t.Fatalf("total_tokens: got %d, want 57", u.TotalTokens)
+	}
+
+	// Verify Totals() returns correct aggregate (for dashboard display)
+	totals := tracker.Totals()
+	if totals.PromptTokens != 15 || totals.CompletionTokens != 42 || totals.TotalTokens != 57 {
+		t.Fatalf("Totals(): prompt=%d, completion=%d, total=%d", totals.PromptTokens, totals.CompletionTokens, totals.TotalTokens)
+	}
+
+	// Verify dashboard would see correct data via snapshot endpoint
+	if tracker.Totals().PromptTokens == 0 || tracker.Totals().CompletionTokens == 0 {
+		t.Fatal("dashboard would show all zeros for tokens - this is the bug!")
+	}
+}
+
+func TestIntegrationOpenAIStreamingTokenTracking(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	// Mock OpenAI-compatible streaming response with usage
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, `data: {"id":"chatcmpl-1","choices":[{"delta":{"role":"assistant","content":"Hello"},"index":0}]}`+"\n\n")
+		flusher.Flush()
+		fmt.Fprintf(w, `data: {"id":"chatcmpl-1","choices":[{"delta":{"content":" world"},"index":0}]}`+"\n\n")
+		flusher.Flush()
+		fmt.Fprintf(w, `data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":12,"completion_tokens":8}}`+"\n\n")
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		ListenAddr: ":0", Upstream: mustParse(upstream.URL),
+		CaptureRequests: false, CaptureResponses: false, CaptureStreamChunks: false, LogDir: t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(p)
+	defer httpSrv.Close()
+
+	reqBody := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	resp, err := http.Post(httpSrv.URL+"/v1/chat/completions", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	snap := tracker.Snapshot()
+	u := snap["gpt-4"]
+	if u.PromptTokens != 12 {
+		t.Fatalf("prompt_tokens: got %d, want 12", u.PromptTokens)
+	}
+	if u.CompletionTokens != 8 {
+		t.Fatalf("completion_tokens: got %d, want 8", u.CompletionTokens)
+	}
+}
+
+func TestIntegrationNonStreamingOllamaTokenTracking(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	// Mock Ollama non-streaming response with usage fields
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"llama3","content":"response text","done":true,"eval_count":25,"prompt_eval_count":10}`))
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		ListenAddr: ":0", Upstream: mustParse(upstream.URL),
+		CaptureRequests: false, CaptureResponses: false, CaptureStreamChunks: false, LogDir: t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(p)
+	defer httpSrv.Close()
+
+	reqBody := `{"model":"llama3","messages":[{"role":"user","content":"hi"}]}` // no stream=true
+	resp, err := http.Post(httpSrv.URL+"/api/chat", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	snap := tracker.Snapshot()
+	u := snap["llama3"]
+	if u.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", u.RequestCount)
+	}
+	if u.PromptTokens != 10 {
+		t.Fatalf("prompt_tokens: got %d, want 10", u.PromptTokens)
+	}
+	if u.CompletionTokens != 25 {
+		t.Fatalf("completion_tokens: got %d, want 25", u.CompletionTokens)
+	}
+
+	// Verify Totals() matches (this is what dashboard uses)
+	totals := tracker.Totals()
+	if totals.PromptTokens != 10 || totals.CompletionTokens != 25 {
+		t.Fatalf("Totals mismatch: prompt=%d, completion=%d", totals.PromptTokens, totals.CompletionTokens)
+	}
+}
+
+func TestIntegrationNonStreamingOllamaZeroTokensNotRecorded(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	// Mock Ollama non-streaming response WITHOUT eval fields (simulating edge case)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"llama3","content":"response text","done":true}`)) // no eval_count or prompt_eval_count
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		ListenAddr: ":0", Upstream: mustParse(upstream.URL),
+		CaptureRequests: false, CaptureResponses: false, CaptureStreamChunks: false, LogDir: t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(p)
+	defer httpSrv.Close()
+
+	reqBody := `{"model":"llama3","messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(httpSrv.URL+"/api/chat", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	snap := tracker.Snapshot()
+	u := snap["llama3"]
+	// Request count should still be recorded but tokens should be zero
+	if u.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", u.RequestCount)
+	}
+	if u.TotalTokens != 0 {
+		t.Fatalf("total_tokens should be 0 when Ollama omits eval fields: got %d", u.TotalTokens)
+	}
+
+	// Verify Totals() returns zeros (dashboard would show zeros for this case)
+	totals := tracker.Totals()
+	if totals.PromptTokens != 0 || totals.CompletionTokens != 0 {
+		t.Fatal("Totals should be zero when Ollama omits eval fields")
 	}
 }

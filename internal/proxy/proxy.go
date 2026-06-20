@@ -247,7 +247,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						completionTokens = usage.CompletionTokens
 					}
 				}
-				p.recordModelUsage(modelName, promptTokens, completionTokens)
+				if promptTokens > 0 || completionTokens > 0 {
+					p.recordModelUsage(modelName, promptTokens, completionTokens)
+				}
 			}
 		}
 	}
@@ -532,8 +534,8 @@ func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http
 				promptTokens = usage.PromptTokens
 				completionTokens = usage.CompletionTokens
 			}
-			// Always record when we have a tracked model and a valid usage event.
-			if p.tracker != nil && trackedModel != "" {
+			// Record when we have a tracked model, non-zero tokens, and a valid usage event.
+			if p.tracker != nil && trackedModel != "" && (promptTokens + completionTokens > 0) {
 				p.recordModelUsage(trackedModel, promptTokens, completionTokens)
 				chunks = append(chunks, &logging.StreamChunk{
 					ID:        id,
@@ -637,8 +639,14 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 					Time:      time.Now().UTC().Format(time.RFC3339Nano),
 				})
 			}
-			if stats.Done == true {
+			// Record token usage when Done is true and we have meaningful token counts.
+			// Note: stats.Done and token recording are independent concerns.
+			if stats.Done && (stats.PromptEval > 0 || stats.EvalCount > 0) {
 				p.recordModelUsage(trackedModel, stats.PromptEval, stats.EvalCount)
+			}
+			// Set done marker whenever Done signal received, regardless of token count.
+			// This prevents double [DONE] markers for models returning zero tokens (qwen3.6).
+			if stats.Done {
 				sawDoneMarker = true
 			}
 		} else if p.cfg.CaptureStreamChunks {

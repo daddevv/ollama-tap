@@ -84,22 +84,27 @@ func toMillis(n json.Number) float64 {
 }
 
 // OllamaSSEUsage holds usage stats from an SSE event that uses native
-// Ollama nanosecond fields (prompt_ns / completion_ns).
+// Ollama nanosecond fields (prompt_ns / completion_ns) or token fields.
 type OllamaSSEUsage struct {
     PromptTokens     int64
     CompletionTokens int64
+    InputTokens      int64
+    OutputTokens     int64
 }
 
-// ParseOllamaSSEUsage extracts usage from a JSON data object. It handles both
-// OpenAI-compatible field names (prompt_tokens, completion_tokens) and native
-// Ollama nanosecond fields (prompt_ns, completion_ns).  Returns nil when no
-// usable values are found so the caller can distinguish "no usage" from "all zeroes".
+// ParseOllamaSSEUsage extracts usage from a JSON data object. It handles:
+// - OpenAI fields: prompt_tokens, completion_tokens
+// - Ollama /v1/responses alias fields: input_tokens, output_tokens
+// - Native Ollama nanosecond fields: prompt_ns, completion_ns
+// Returns nil when no usable values are found so the caller can distinguish "no usage" from "all zeroes".
 func ParseOllamaSSEUsage(obj map[string]json.RawMessage) *OllamaSSEUsage {
     var inner struct {
-        PromptTokens   *json.Number `json:"prompt_tokens"`
+        PromptTokens     *json.Number `json:"prompt_tokens"`
         CompletionTokens *json.Number `json:"completion_tokens"`
-        PromptNs       *json.Number `json:"prompt_ns"`
-        CompletionNs   *json.Number `json:"completion_ns"`
+        InputTokens      *json.Number `json:"input_tokens"`
+        OutputTokens     *json.Number `json:"output_tokens"`
+        PromptNs         *json.Number `json:"prompt_ns"`
+        CompletionNs     *json.Number `json:"completion_ns"`
     }
 
     // 1) Check if there is a wrapped "usage" object.
@@ -108,22 +113,26 @@ func ParseOllamaSSEUsage(obj map[string]json.RawMessage) *OllamaSSEUsage {
             continue
         }
         var usage struct {
-            PromptTokens   *json.Number `json:"prompt_tokens"`
+            PromptTokens     *json.Number `json:"prompt_tokens"`
             CompletionTokens *json.Number `json:"completion_tokens"`
-            PromptNs       *json.Number `json:"prompt_ns"`
-            CompletionNs   *json.Number `json:"completion_ns"`
+            InputTokens      *json.Number `json:"input_tokens"`
+            OutputTokens     *json.Number `json:"output_tokens"`
+            PromptNs         *json.Number `json:"prompt_ns"`
+            CompletionNs     *json.Number `json:"completion_ns"`
         }
         if err := json.Unmarshal(v, &usage); err != nil {
             continue
         }
         inner.PromptTokens = usage.PromptTokens
         inner.CompletionTokens = usage.CompletionTokens
+        inner.InputTokens = usage.InputTokens
+        inner.OutputTokens = usage.OutputTokens
         inner.PromptNs = usage.PromptNs
         inner.CompletionNs = usage.CompletionNs
     }
 
     u := &OllamaSSEUsage{}
-    // Try OpenAI-compatible field names first.
+    // Try OpenAI-compatible field names first (prompt_tokens/completion_tokens).
     if inner.PromptTokens != nil {
         f, _ := inner.PromptTokens.Float64()
         u.PromptTokens = int64(f)
@@ -132,36 +141,53 @@ func ParseOllamaSSEUsage(obj map[string]json.RawMessage) *OllamaSSEUsage {
         f, _ := inner.CompletionTokens.Float64()
         u.CompletionTokens = int64(f)
     }
-    // Fallback to native Ollama nanosecond fields when OpenAI fields are absent.
-    if u.PromptTokens == 0 && inner.PromptNs != nil {
+    // Try Ollama /v1/responses alias fields (input_tokens/output_tokens).
+    if inner.InputTokens != nil {
+        f, _ := inner.InputTokens.Float64()
+        u.InputTokens = int64(f)
+    }
+    if inner.OutputTokens != nil {
+        f, _ := inner.OutputTokens.Float64()
+        u.OutputTokens = int64(f)
+    }
+    // Fallback to native Ollama nanosecond fields when token fields are absent.
+    if u.PromptTokens == 0 && u.InputTokens == 0 && inner.PromptNs != nil {
         f, _ := inner.PromptNs.Float64()
         u.PromptTokens = int64(f)
     }
-    if u.CompletionTokens == 0 && inner.CompletionNs != nil {
+    if u.CompletionTokens == 0 && u.OutputTokens == 0 && inner.CompletionNs != nil {
         f, _ := inner.CompletionNs.Float64()
         u.CompletionTokens = int64(f)
     }
 
     // Return nil only when we found absolutely nothing.
-    if u.PromptTokens == 0 && u.CompletionTokens == 0 {
+    if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.InputTokens == 0 && u.OutputTokens == 0 {
         return nil
     }
     return u
 }
 
 // OpenAIUsage holds usage stats from an OpenAI-compatible API response.
+// Supports both OpenAI fields (prompt_tokens/completion_tokens) and
+// Ollama /v1/responses alias fields (input_tokens/output_tokens).
 type OpenAIUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
+	InputTokens      int64 `json:"input_tokens"`
+	OutputTokens     int64 `json:"output_tokens"`
 }
 
 // ParseOpenAIUsage extracts usage from a JSON object (e.g., SSE data).
+// Handles both OpenAI fields (prompt_tokens/completion_tokens) and
+// Ollama /v1/responses alias fields (input_tokens/output_tokens).
 func ParseOpenAIUsage(obj map[string]json.RawMessage) *OpenAIUsage {
 	var raw struct {
 		PromptTokens     *json.Number `json:"prompt_tokens"`
 		CompletionTokens *json.Number `json:"completion_tokens"`
 		TotalTokens      *json.Number `json:"total_tokens"`
+		InputTokens      *json.Number `json:"input_tokens"`
+		OutputTokens     *json.Number `json:"output_tokens"`
 	}
 	for k, v := range obj {
 		switch k {
@@ -170,6 +196,8 @@ func ParseOpenAIUsage(obj map[string]json.RawMessage) *OpenAIUsage {
 				PromptTokens     *json.Number `json:"prompt_tokens"`
 				CompletionTokens *json.Number `json:"completion_tokens"`
 				TotalTokens      *json.Number `json:"total_tokens"`
+				InputTokens      *json.Number `json:"input_tokens"`
+				OutputTokens     *json.Number `json:"output_tokens"`
 			}
 			if err := json.Unmarshal(v, &usage); err == nil {
 				raw = usage
@@ -179,20 +207,37 @@ func ParseOpenAIUsage(obj map[string]json.RawMessage) *OpenAIUsage {
 	}
 
 	u := &OpenAIUsage{}
+	// Apply precedence: prompt_tokens > input_tokens
 	if raw.PromptTokens != nil {
 		f, _ := raw.PromptTokens.Float64()
 		u.PromptTokens = int64(f)
+	} else if raw.InputTokens != nil {
+		f, _ := raw.InputTokens.Float64()
+		u.PromptTokens = int64(f)
 	}
+	// Apply precedence: completion_tokens > output_tokens
 	if raw.CompletionTokens != nil {
 		f, _ := raw.CompletionTokens.Float64()
 		u.CompletionTokens = int64(f)
+	} else if raw.OutputTokens != nil {
+		f, _ := raw.OutputTokens.Float64()
+		u.CompletionTokens = int64(f)
+	}
+	// Populate alias fields for tracking
+	if raw.InputTokens != nil {
+		f, _ := raw.InputTokens.Float64()
+		u.InputTokens = int64(f)
+	}
+	if raw.OutputTokens != nil {
+		f, _ := raw.OutputTokens.Float64()
+		u.OutputTokens = int64(f)
 	}
 	if raw.TotalTokens != nil {
 		f, _ := raw.TotalTokens.Float64()
 		u.TotalTokens = int64(f)
 	}
 
-	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 {
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 && u.InputTokens == 0 && u.OutputTokens == 0 {
 		return nil
 	}
 	return u
@@ -300,6 +345,90 @@ func ParseOpenAIChatNonStreaming(raw []byte) (*OpenAIUsage, error) {
 		return nil, nil
 	}
 	return obj.Usage, nil
+}
+
+// NormalizedUsage provides unified token representation with metadata about token reliability.
+type NormalizedUsage struct {
+	InputTokens   int64
+	OutputTokens  int64
+	TotalTokens   int64
+	UsagePresent  bool   // true if any usage object was found
+	UsageReliable bool   // true if totalTokens > 0, indicating model returned meaningful token counts
+	Source        string // "openai", "ollama_alias", or "missing"
+}
+
+// NormalizeUsage converts raw usage data to normalized form.
+// Handles OpenAI fields (prompt_tokens/completion_tokens) and
+// Ollama alias fields (input_tokens/output_tokens) with precedence rules.
+// Returns NormalizedUsage with metadata about reliability and source.
+func NormalizeUsage(usage *OpenAIUsage) NormalizedUsage {
+	if usage == nil {
+		return NormalizedUsage{
+			InputTokens:   0,
+			OutputTokens:  0,
+			TotalTokens:   0,
+			UsagePresent:  false,
+			UsageReliable: false,
+			Source:        "missing",
+		}
+	}
+
+	// Apply token field precedence: OpenAI fields take priority over Ollama alias fields
+	inputTokens := usage.PromptTokens
+	if inputTokens == 0 {
+		inputTokens = usage.InputTokens
+	}
+
+	outputTokens := usage.CompletionTokens
+	if outputTokens == 0 {
+		outputTokens = usage.OutputTokens
+	}
+
+	totalTokens := usage.TotalTokens
+	if totalTokens == 0 {
+		totalTokens = inputTokens + outputTokens
+	}
+
+	// Determine source based on which fields were populated
+	source := "missing"
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
+		source = "openai"
+	} else if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+		source = "ollama_alias"
+	}
+
+	return NormalizedUsage{
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
+		TotalTokens:   totalTokens,
+		UsagePresent:  true,
+		UsageReliable: totalTokens > 0,
+		Source:        source,
+	}
+}
+
+// ExtractUsageFromResponsesEvent extracts usage from a /v1/responses streaming event.
+// Handles nested usage under event.usage or event.response.usage.
+func ExtractUsageFromResponsesEvent(event map[string]json.RawMessage) *OpenAIUsage {
+	// Try top-level usage field first
+	if rawUsage, ok := event["usage"]; ok {
+		usage := &OpenAIUsage{}
+		if err := json.Unmarshal(rawUsage, usage); err == nil {
+			return usage
+		}
+	}
+
+	// Try nested response.usage for some API formats
+	if rawResponse, ok := event["response"]; ok {
+		var resp struct {
+			Usage *OpenAIUsage `json:"usage"`
+		}
+		if err := json.Unmarshal(rawResponse, &resp); err == nil && resp.Usage != nil {
+			return resp.Usage
+		}
+	}
+
+	return nil
 }
 
 // ParseResponsesModel extracts the model name from /v1/responses or /v1/models data.
