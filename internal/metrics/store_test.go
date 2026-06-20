@@ -32,17 +32,34 @@ func TestRingStore_History_Early(t *testing.T) {
 
 func TestRingStore_History_AfterTicks(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil)
+	tracker := NewModelUsageTracker()
+	defer tracker.Stop()
+	store := NewRingStore(m, tracker)
 	defer store.Stop()
 
 	// Trigger a tick so history has data
 	store.Tick()
 
 	m.RecordRequest(10*time.Millisecond, false)
+	tracker.Record("qwen", 11, 22)
+	store.Tick()
 
 	hist := store.History(1)
 	if len(hist) == 0 {
 		t.Fatal("expected some history entries after waiting for ticks")
+	}
+	if hist[0].TotalReqs != 0 || hist[0].PromptTokens != 0 || hist[0].CompletionTokens != 0 {
+		t.Fatalf("expected first history entry to be zero baseline, got %+v", hist[0])
+	}
+	if hist[0].BucketSeconds != 5 {
+		t.Fatalf("expected base bucket_seconds of 5, got %d", hist[0].BucketSeconds)
+	}
+	last := hist[len(hist)-1]
+	if last.TotalReqs != 1 {
+		t.Fatalf("expected final request delta of 1, got %d", last.TotalReqs)
+	}
+	if last.PromptTokens != 11 || last.CompletionTokens != 22 {
+		t.Fatalf("expected token deltas 11/22, got %d/%d", last.PromptTokens, last.CompletionTokens)
 	}
 
 	for i, e := range hist {
@@ -109,6 +126,9 @@ func TestRingStore_ConcurrentTicks(t *testing.T) {
 	if snap["active_connections"] == nil {
 		t.Fatal("snapshot should have active_connections")
 	}
+	if got := snap["active_connections"].(int64); got != 20 {
+		t.Fatalf("active_connections: got %d, want 20", got)
+	}
 }
 
 func TestRingStore_History_StructuralIntegrity(t *testing.T) {
@@ -130,6 +150,45 @@ func TestRingStore_History_StructuralIntegrity(t *testing.T) {
 		if e.Successful < -1e6 && i > 0 {
 			t.Errorf("entry %d: unexpected large negative successful_delta %d", i, e.Successful)
 		}
+	}
+}
+
+func TestRingStore_HistorySeries_CompressesToMaxPoints(t *testing.T) {
+	m := New()
+	tracker := NewModelUsageTracker()
+	defer tracker.Stop()
+	store := NewRingStore(m, tracker)
+	defer store.Stop()
+
+	store.Tick()
+	for i := 0; i < 12; i++ {
+		m.RecordRequest(1*time.Millisecond, i%2 == 0)
+		tracker.Record("qwen", 2, 3)
+		store.Tick()
+	}
+
+	series := store.HistorySeries(1, 4)
+	if len(series) > 4 {
+		t.Fatalf("expected compressed series to stay within 4 points, got %d", len(series))
+	}
+	if len(series) == 0 {
+		t.Fatal("expected non-empty compressed series")
+	}
+	if series[0].BucketSeconds <= 0 {
+		t.Fatalf("expected positive bucket_seconds, got %d", series[0].BucketSeconds)
+	}
+
+	var reqs, prompt, completion int64
+	for _, entry := range series {
+		reqs += entry.TotalReqs
+		prompt += entry.PromptTokens
+		completion += entry.CompletionTokens
+	}
+	if reqs != 12 {
+		t.Fatalf("expected 12 total requests after compression, got %d", reqs)
+	}
+	if prompt != 24 || completion != 36 {
+		t.Fatalf("expected token totals 24/36 after compression, got %d/%d", prompt, completion)
 	}
 }
 

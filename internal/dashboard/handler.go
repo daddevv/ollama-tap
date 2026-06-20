@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/daddevv/ollama-tap/internal/metrics"
@@ -15,7 +16,16 @@ import (
 //go:embed assets
 var assets embed.FS
 
-const defaultHistoryMinutes = 60
+const defaultHistoryMinutes = 1440 // 24 hours
+const defaultHistoryPoints = 288
+const maxHistoryPoints = 720
+
+func cacheControl(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "max-age=5, public")
+		next(w, r)
+	}
+}
 
 // RegisterHandlers registers all dashboard endpoints on the given mux.
 func RegisterHandlers(mux *http.ServeMux, store *metrics.RingStore, tracker *metrics.ModelUsageTracker, m *metrics.Metrics) {
@@ -33,51 +43,67 @@ func RegisterHandlers(mux *http.ServeMux, store *metrics.RingStore, tracker *met
 		w.Write(data)
 	})
 
-	mux.HandleFunc("/_tap/dashboard/api/snapshot", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/_tap/dashboard/api/snapshot", cacheControl(func(w http.ResponseWriter, r *http.Request) {
 		snap := store.Snapshot()
 		st := m.Snapshot()
 
-		// Sum token totals from all models.
-		var totalPromptTokens, totalCompletionTokens int64
-		trackerSnapshot := tracker.Snapshot()
-		for _, u := range trackerSnapshot {
-			totalPromptTokens += u.PromptTokens
-			totalCompletionTokens += u.CompletionTokens
-		}
+		totals := tracker.Totals()
 
 		out := map[string]interface{}{
 			"timestamp":                 snap["timestamp"],
 			"active_connections":        snap["active_connections"],
+			"active_streaming_connections": st.ActiveStreaming,
 			"request_count":             st.TotalRequests,
 			"total_requests":            st.TotalRequests,
+			"failed_requests":           st.Failures,
 			"streaming_connections":     st.StreamingCount,
 			"non_streaming_connections": st.NonStreamingCount,
 			"uptime":                    st.Uptime,
 			// Token totals across all models.
-			"total_prompt_tokens":       totalPromptTokens,
-			"total_completion_tokens":   totalCompletionTokens,
-			"total_tokens":              totalPromptTokens + totalCompletionTokens,
+			"total_prompt_tokens":       totals.PromptTokens,
+			"total_completion_tokens":   totals.CompletionTokens,
+			"total_tokens":              totals.TotalTokens,
 		}
 		respondJSON(w, out)
-	})
+	}))
 
-	mux.HandleFunc("/_tap/dashboard/api/history", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/_tap/dashboard/api/history", cacheControl(func(w http.ResponseWriter, r *http.Request) {
 		minutesStr := r.URL.Query().Get("minutes")
+		pointsStr := r.URL.Query().Get("points")
 		var minutes int = defaultHistoryMinutes
+		var points int = defaultHistoryPoints
 		if minutesStr != "" {
-			fmt.Sscanf(minutesStr, "%d", &minutes)
-			if minutes <= 0 || minutes > 1440 {
-				minutes = defaultHistoryMinutes
+			val, err := strconv.Atoi(minutesStr)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("invalid minutes value: %q", minutesStr), http.StatusBadRequest)
+				return
 			}
+			if val <= 0 || val > 1440 {
+				http.Error(w, "minutes must be between 1 and 1440", http.StatusBadRequest)
+				return
+			}
+			minutes = val
 		}
-		history := store.History(minutes)
+		if pointsStr != "" {
+			val, err := strconv.Atoi(pointsStr)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("invalid points value: %q", pointsStr), http.StatusBadRequest)
+				return
+			}
+			if val <= 0 || val > maxHistoryPoints {
+				http.Error(w, fmt.Sprintf("points must be between 1 and %d", maxHistoryPoints), http.StatusBadRequest)
+				return
+			}
+			points = val
+		}
+		history := store.HistorySeries(minutes, points)
 		respondJSON(w, history)
-	})
+	}))
 
-	mux.HandleFunc("/_tap/dashboard/api/models", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/_tap/dashboard/api/models", cacheControl(func(w http.ResponseWriter, r *http.Request) {
 		data := tracker.Snapshot()
 		respondJSON(w, data)
-	})
+	}))
 
 	var dashboardReady sync.Once
 	dashboardReady.Do(func() { log.Println("dashboard: enabled — visit /_tap/dashboard") })

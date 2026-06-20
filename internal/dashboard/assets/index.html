@@ -1,233 +1,873 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ollama-tap — Dashboard</title>
+<title>ollama-tap Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0f1117;color:#e4e4e7;line-height:1.5;min-height:100vh;display:flex;flex-direction:column}
-a{color:#818cf8;text-decoration:none}a:hover{text-decoration:underline}
-
-/* Header */
-header{padding:.875rem 1.5rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #27272a;background:#18181b}
-header h1{font-size:1.0625rem;font-weight:600;letter-spacing:-.025em}
-.badge{font-size:.75rem;background:#1e1b4b;color:#a5b4fc;padding:.25rem .75rem;border-radius:9999px}
-
-/* Main */
-main{padding:1.25rem 1.5rem;flex:1;max-width:1600px;width:100%;margin:0 auto}
-
-/* Cards */
-.card{background:#18181b;border:1px solid #27272a;border-radius:.5rem;padding:1.25rem 1.5rem}
-.card+.card{margin-top:1rem}
-
-/* Stats grid — responsive columns */
-.top-row{display:grid;grid-template-columns:repeat(6,1fr);gap:.875rem}
-.stat{text-align:center}
-.stat .val{font-size:1.75rem;font-weight:700;color:#fff;line-height:1.15;word-break:break-word;font-variant-numeric:tabular-nums}
-.stat .lbl{font-size:.6875rem;color:#a1a1aa;text-transform:uppercase;letter-spacing:.06em;margin-top:.2rem}
-
-/* Charts */
-.chart-wrap{position:relative;width:100%;height:260px;margin-top:.5rem}
-.chart-title{font-size:.8125rem;font-weight:600;color:#d4d4d8;padding-bottom:.375rem}
-.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-
-/* Model table */
-.models-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -.5rem;padding:0 .5rem}
-.models-table{width:100%;border-collapse:collapse;margin-top:.5rem;min-width:520px}
-.models-table th,.models-table td{text-align:left;padding:.4375rem .625rem;border-bottom:1px solid #27272a;font-size:.8125rem}
-.models-table th{color:#a1a1aa;font-weight:500;text-transform:uppercase;font-size:.625rem;letter-spacing:.05em;white-space:nowrap}
-.models-table tr:last-child td{border-bottom:none}
-.models-table .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
-
-/* Footer */
-footer{padding:.875rem 1.5rem;color:#52525b;font-size:.6875rem;border-top:1px solid #27272a;margin-top:auto}
-
-/* Responsive breakpoints */
-@media(max-width:1200px){
-  .top-row{grid-template-columns:repeat(4,1fr)}
+:root,
+[data-theme="light"] {
+  --bg: #f3efe7;
+  --surface: rgba(255,255,255,0.82);
+  --surface-strong: #ffffff;
+  --surface-muted: rgba(255,255,255,0.56);
+  --text: #1d232d;
+  --text-soft: #5d6675;
+  --border: rgba(29,35,45,0.10);
+  --accent: #0f766e;
+  --accent-soft: rgba(15,118,110,0.14);
+  --blue: #0284c7;
+  --rose: #db2777;
+  --gold: #ca8a04;
+  --green: #15803d;
+  --red: #dc2626;
+  --shadow: 0 18px 40px rgba(30,41,59,0.08);
+  --shadow-soft: 0 10px 24px rgba(30,41,59,0.05);
+  --grid: rgba(29,35,45,0.08);
+  --hero-a: rgba(15,118,110,0.14);
+  --hero-b: rgba(2,132,199,0.14);
 }
-@media(max-width:768px){
-  header{padding:.75rem 1rem}
-  main{padding:1rem}
-  .card{padding:1rem 1.125rem}
-  .top-row{grid-template-columns:repeat(3,1fr)}
-  .stat .val{font-size:1.375rem}
-  .charts-grid{grid-template-columns:1fr}
-  .chart-wrap{height:220px}
-  .models-table{min-width:440px}
+
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --surface: rgba(20,27,34,0.82);
+  --surface-strong: #121a22;
+  --surface-muted: rgba(18,26,34,0.66);
+  --text: #edf2f7;
+  --text-soft: #8b99aa;
+  --border: rgba(237,242,247,0.08);
+  --accent: #2dd4bf;
+  --accent-soft: rgba(45,212,191,0.14);
+  --blue: #38bdf8;
+  --rose: #f472b6;
+  --gold: #fbbf24;
+  --green: #4ade80;
+  --red: #f87171;
+  --shadow: 0 18px 40px rgba(0,0,0,0.35);
+  --shadow-soft: 0 10px 24px rgba(0,0,0,0.22);
+  --grid: rgba(255,255,255,0.08);
+  --hero-a: rgba(45,212,191,0.12);
+  --hero-b: rgba(56,189,248,0.14);
 }
-@media(max-width:480px){
-  .top-row{grid-template-columns:repeat(2,1fr)}
-  .stat .val{font-size:1.125rem}
-  header h1{font-size:.9375rem}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, var(--hero-a), transparent 32%),
+    radial-gradient(circle at top right, var(--hero-b), transparent 28%),
+    linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
+    var(--bg);
+}
+a { color: inherit; }
+.shell { max-width: 1560px; margin: 0 auto; padding: 28px 24px 24px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.brand { display: flex; align-items: flex-start; gap: 14px; }
+.brand-mark {
+  width: 44px; height: 44px; border-radius: 14px; background: linear-gradient(135deg, var(--accent-soft), rgba(255,255,255,0.04));
+  border: 1px solid var(--border); display: grid; place-items: center; box-shadow: var(--shadow-soft); color: var(--accent); font-weight: 800; letter-spacing: 0.08em;
+}
+.brand-copy h1 { margin: 0; font-size: 1.5rem; line-height: 1.1; letter-spacing: -0.04em; }
+.brand-copy p { margin: 6px 0 0; color: var(--text-soft); font-size: 0.95rem; }
+.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.status-pill, .theme-toggle, .chip {
+  border: 1px solid var(--border); background: var(--surface-muted); backdrop-filter: blur(16px); box-shadow: var(--shadow-soft);
+}
+.status-pill {
+  display: inline-flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.status-dot { width: 9px; height: 9px; border-radius: 999px; background: currentColor; box-shadow: 0 0 0 5px rgba(255,255,255,0.04); }
+.status-pill.live { color: var(--green); }
+.status-pill.stale { color: var(--gold); }
+.status-pill.error { color: var(--red); }
+.theme-toggle { appearance: none; border-radius: 12px; color: var(--text); padding: 10px 14px; cursor: pointer; font: inherit; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(320px, 1fr); gap: 18px; margin-bottom: 18px; }
+.panel {
+  background: var(--surface); border: 1px solid var(--border); backdrop-filter: blur(18px); border-radius: 24px; box-shadow: var(--shadow);
+}
+.hero-main { padding: 26px; position: relative; overflow: hidden; }
+.hero-main::after {
+  content: ""; position: absolute; inset: auto -8% -40% auto; width: 260px; height: 260px; border-radius: 999px; background: radial-gradient(circle, var(--hero-a), transparent 68%); pointer-events: none;
+}
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.hero-main h2 { margin: 16px 0 10px; font-size: clamp(1.8rem, 4vw, 3rem); line-height: 0.96; letter-spacing: -0.06em; max-width: 10ch; }
+.hero-main p { margin: 0; color: var(--text-soft); max-width: 56ch; font-size: 1rem; }
+.hero-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 24px; }
+.chip { border-radius: 18px; padding: 14px; }
+.chip-label { display: block; color: var(--text-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+.chip-value { font-size: 1.4rem; font-weight: 800; letter-spacing: -0.04em; }
+.hero-side { padding: 22px; display: grid; grid-template-rows: auto 1fr; gap: 18px; }
+.section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.section-title h3, .section-title h2 { margin: 0; font-size: 0.86rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-soft); }
+.muted { color: var(--text-soft); }
+.score-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.score-card { padding: 16px; border-radius: 18px; background: var(--surface-muted); border: 1px solid var(--border); }
+.score-card span { display: block; }
+.score-card .kicker { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft); margin-bottom: 8px; }
+.score-card .score { font-size: 1.45rem; font-weight: 800; letter-spacing: -0.05em; }
+.score-card .hint { margin-top: 6px; color: var(--text-soft); font-size: 0.82rem; }
+.stats-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.stat-card { padding: 18px; min-height: 132px; display: flex; flex-direction: column; justify-content: space-between; }
+.stat-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--text-soft); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.stat-icon { width: 32px; height: 32px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 800; }
+.stat-value { font-size: 1.9rem; font-weight: 800; letter-spacing: -0.06em; font-variant-numeric: tabular-nums; line-height: 1; }
+.stat-note { color: var(--text-soft); font-size: 0.84rem; }
+.stat-sparkline { position: relative; height: 34px; margin-top: 14px; }
+.chart-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.95fr); gap: 18px; margin-bottom: 18px; }
+.chart-panel, .models-panel { padding: 22px; }
+.chart-wrap { position: relative; height: 320px; }
+.chart-subtitle { font-size: 0.85rem; color: var(--text-soft); }
+.summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.summary-card { padding: 14px; border-radius: 18px; background: var(--surface-muted); border: 1px solid var(--border); }
+.summary-card strong { display: block; font-size: 1.05rem; letter-spacing: -0.03em; margin-bottom: 6px; }
+.table-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.table-wrap { overflow: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 14px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+th { color: var(--text-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer; user-select: none; }
+th.sorted::after { content: attr(data-indicator); margin-left: 6px; color: var(--accent); }
+tbody tr:hover { background: rgba(255,255,255,0.03); }
+.model-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.top-row td:first-child { color: var(--gold); }
+.alert {
+  display: none; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border-radius: 18px; border: 1px solid rgba(248,113,113,0.35); background: rgba(248,113,113,0.12); color: var(--red); margin-bottom: 18px;
+}
+.alert.visible { display: flex; }
+.footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 4px 0; color: var(--text-soft); font-size: 0.82rem;
+}
+@media (max-width: 1280px) {
+  .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .hero { grid-template-columns: 1fr; }
+}
+@media (max-width: 980px) {
+  .chart-grid { grid-template-columns: 1fr; }
+  .summary-grid { grid-template-columns: 1fr; }
+  .hero-meta { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .shell { padding: 18px 14px 20px; }
+  .topbar { flex-direction: column; align-items: stretch; }
+  .topbar-actions { justify-content: space-between; }
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .score-grid { grid-template-columns: 1fr; }
+  .chart-wrap { height: 260px; }
+  .table-tools, .footer { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 480px) {
+  .stats-grid { grid-template-columns: 1fr; }
+  .hero-main, .hero-side, .chart-panel, .models-panel { padding: 18px; }
+  .stat-card { min-height: 116px; }
+  .stat-value { font-size: 1.6rem; }
 }
 </style>
 </head>
 <body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">OT</div>
+      <div class="brand-copy">
+        <h1>ollama-tap dashboard</h1>
+        <p>Live proxy health, usage, and throughput tuned for long-running monitoring.</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <div id="status-pill" class="status-pill live"><span class="status-dot"></span><span id="status-text">Live</span></div>
+      <button id="theme-toggle" class="theme-toggle" type="button">Toggle theme</button>
+    </div>
+  </header>
 
-<header>
-  <h1>ollama-tap <span style="color:#71717a;font-weight:400">dashboard</span></h1>
-  <span class="badge">● live</span>
-</header>
-
-<main>
-  <!-- Stats row -->
-  <div class="card top-row">
-    <div class="stat"><div class="val" id="s-uptime">—</div><div class="lbl">Uptime</div></div>
-    <div class="stat"><div class="val" id="s-conns">0</div><div class="lbl">Active Conns</div></div>
-    <div class="stat"><div class="val" id="s-requests">0</div><div class="lbl">Total Requests</div></div>
-    <div class="stat"><div class="val" id="s-prompt-tokens" style="color:#38bdf8">0</div><div class="lbl">Prompt Tokens</div></div>
-    <div class="stat"><div class="val" id="s-completion-tokens" style="color:#f472b6">0</div><div class="lbl">Completion Tokens</div></div>
-    <div class="stat"><div class="val" id="s-streaming">0</div><div class="lbl">Streaming</div></div>
+  <div id="alert" class="alert" role="status" aria-live="polite">
+    <strong id="alert-title">Connection interrupted</strong>
+    <span id="alert-detail">Retrying dashboard API calls.</span>
   </div>
 
-  <!-- Charts row -->
-  <div class="charts-grid" style="margin-top:1rem">
-    <div class="card">
-      <div class="chart-title">Token Throughput (tokens/sec)</div>
+  <section class="hero">
+    <div class="panel hero-main">
+      <span class="eyebrow">Real-time monitoring</span>
+      <h2>Watch the proxy without second-guessing the data.</h2>
+      <p>The dashboard now renders server-bucketed history, real token deltas, and clearer live state so updates stay stable over long sessions.</p>
+      <div class="hero-meta">
+        <div class="chip">
+          <span class="chip-label">Last refresh</span>
+          <span id="last-refresh" class="chip-value">Waiting...</span>
+        </div>
+        <div class="chip">
+          <span class="chip-label">History window</span>
+          <span id="history-window" class="chip-value">24h</span>
+        </div>
+        <div class="chip">
+          <span class="chip-label">Poll cadence</span>
+          <span id="poll-cadence" class="chip-value">5s</span>
+        </div>
+      </div>
+    </div>
+
+    <aside class="panel hero-side">
+      <div>
+        <div class="section-title">
+          <h3>Live health</h3>
+          <span id="stale-note" class="muted">Fresh data</span>
+        </div>
+        <div class="score-grid">
+          <div class="score-card">
+            <span class="kicker">Success rate</span>
+            <span id="score-success-rate" class="score">0%</span>
+            <span class="hint">Requests completed without failure.</span>
+          </div>
+          <div class="score-card">
+            <span class="kicker">Req / min</span>
+            <span id="score-rpm" class="score">0</span>
+            <span class="hint">Average across the visible history.</span>
+          </div>
+          <div class="score-card">
+            <span class="kicker">Prompt / sec</span>
+            <span id="score-prompt-rate" class="score">0</span>
+            <span class="hint">Derived from real prompt token deltas.</span>
+          </div>
+          <div class="score-card">
+            <span class="kicker">Completion / sec</span>
+            <span id="score-completion-rate" class="score">0</span>
+            <span class="hint">Tracks generation throughput, not guesses.</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="section-title">
+          <h3>Connection mix</h3>
+          <span class="muted">Streaming state</span>
+        </div>
+        <div class="score-grid">
+          <div class="score-card">
+            <span class="kicker">Active</span>
+            <span id="mix-active" class="score">0</span>
+            <span class="hint">Current open proxy connections.</span>
+          </div>
+          <div class="score-card">
+            <span class="kicker">Live streams</span>
+            <span id="mix-streams" class="score">0</span>
+            <span class="hint">Requests currently streaming tokens.</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <section class="stats-grid">
+    <article class="panel stat-card">
+      <div class="stat-head"><span>Uptime</span><span class="stat-icon">U</span></div>
+      <div>
+        <div id="s-uptime" class="stat-value">--</div>
+        <div class="stat-note">Proxy runtime without reset.</div>
+      </div>
+    </article>
+    <article class="panel stat-card">
+      <div class="stat-head"><span>Active connections</span><span class="stat-icon">A</span></div>
+      <div>
+        <div id="s-conns" class="stat-value">0</div>
+        <div class="stat-note">Live socket count.</div>
+      </div>
+      <div class="stat-sparkline"><canvas id="spark-conns"></canvas></div>
+    </article>
+    <article class="panel stat-card">
+      <div class="stat-head"><span>Total requests</span><span class="stat-icon">R</span></div>
+      <div>
+        <div id="s-requests" class="stat-value">0</div>
+        <div class="stat-note">All proxy requests observed.</div>
+      </div>
+    </article>
+    <article class="panel stat-card">
+      <div class="stat-head"><span>Prompt tokens</span><span class="stat-icon">P</span></div>
+      <div>
+        <div id="s-prompt-tokens" class="stat-value">0</div>
+        <div class="stat-note">Accumulated prompt input volume.</div>
+      </div>
+    </article>
+    <article class="panel stat-card">
+      <div class="stat-head"><span>Completion tokens</span><span class="stat-icon">C</span></div>
+      <div>
+        <div id="s-completion-tokens" class="stat-value">0</div>
+        <div class="stat-note">Accumulated output generation volume.</div>
+      </div>
+    </article>
+    <article class="panel stat-card">
+      <div class="stat-head"><span>Failures</span><span class="stat-icon">F</span></div>
+      <div>
+        <div id="s-failures" class="stat-value">0</div>
+        <div class="stat-note">Failed upstream or proxy requests.</div>
+      </div>
+    </article>
+  </section>
+
+  <section class="chart-grid">
+    <article class="panel chart-panel">
+      <div class="section-title">
+        <div>
+          <h2>Token throughput</h2>
+          <div class="chart-subtitle">Prompt and completion tokens per second across the selected 24-hour view.</div>
+        </div>
+        <span id="throughput-points" class="muted">0 points</span>
+      </div>
       <div class="chart-wrap"><canvas id="chart-tokens"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="chart-title">Success / Failure Rate</div>
+      <div class="summary-grid">
+        <div class="summary-card"><strong id="summary-prompt-total">0</strong><span class="muted">prompt tokens in view</span></div>
+        <div class="summary-card"><strong id="summary-completion-total">0</strong><span class="muted">completion tokens in view</span></div>
+        <div class="summary-card"><strong id="summary-peak-throughput">0/s</strong><span class="muted">peak combined throughput</span></div>
+      </div>
+    </article>
+
+    <article class="panel chart-panel">
+      <div class="section-title">
+        <div>
+          <h2>Delivery quality</h2>
+          <div class="chart-subtitle">Successes and failures per interval, compressed server-side for stable rendering.</div>
+        </div>
+        <span id="success-rate-badge" class="muted">0% success</span>
+      </div>
       <div class="chart-wrap"><canvas id="chart-success"></canvas></div>
-    </div>
-  </div>
+      <div class="summary-grid">
+        <div class="summary-card"><strong id="summary-successes">0</strong><span class="muted">successful requests in view</span></div>
+        <div class="summary-card"><strong id="summary-failures">0</strong><span class="muted">failed requests in view</span></div>
+        <div class="summary-card"><strong id="summary-stream-share">0%</strong><span class="muted">streaming request share</span></div>
+      </div>
+    </article>
+  </section>
 
-  <!-- Model usage -->
-  <div class="card" style="margin-top:1rem">
-    <div class="chart-title">Model Usage</div>
-    <div class="models-wrap">
-      <table class="models-table"><thead><tr><th>Model</th><th>Prompt</th><th>Completion</th><th>Total</th><th>Reqs</th></tr></thead><tbody id="model-body"></tbody></table>
+  <section class="panel models-panel">
+    <div class="table-tools">
+      <div>
+        <div class="section-title" style="margin-bottom: 4px;"><h2>Model usage</h2></div>
+        <div class="chart-subtitle">Top models by usage, sortable by any visible metric.</div>
+      </div>
+      <div class="muted" id="model-count">0 models</div>
     </div>
-  </div>
-</main>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th data-col="name">Model</th>
+            <th data-col="prompt_tokens" class="num">Prompt</th>
+            <th data-col="completion_tokens" class="num">Completion</th>
+            <th data-col="total_tokens" class="num">Total</th>
+            <th data-col="request_count" class="num">Requests</th>
+          </tr>
+        </thead>
+        <tbody id="model-body"></tbody>
+      </table>
+    </div>
+  </section>
 
-<footer>Data refreshes every <span id="interval-label">5</span>s · Powered by <a href="https://github.com/daddevv/ollama-tap" target="_blank">ollama-tap</a></footer>
+  <footer class="footer">
+    <span>Refreshes every <span id="interval-label">5</span>s with server-bucketed history.</span>
+    <a href="https://github.com/daddevv/ollama-tap" target="_blank" rel="noopener">Project repository</a>
+  </footer>
+</div>
 
 <script>
-var SLICE=120,INTVL=5000;
+(function () {
+  var POLL_MS = 5000;
+  var HISTORY_MINUTES = 1440;
+  var HISTORY_POINTS = 288;
+  var CONN_SPARK_LIMIT = 48;
+  var sortState = { col: 'request_count', dir: 'desc' };
+  var modelCache = {};
+  var sparklinePoints = [];
+  var lastSuccessfulRefresh = null;
+  var pollInFlight = false;
 
-/* ---------- helpers ---------- */
-function dur(sec){
-  var h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
-  return(h?h+'h ':'')+m+'m '+s+'s';
-}
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-function fmtTokens(n){
-  if(n>=1e9)return(n/1e9).toFixed(1)+'B';
-  if(n>=1e6)return(n/1e6).toFixed(1)+'M';
-  if(n>=1e3)return(n/1e3).toFixed(1)+'K';
-  return String(n);
-}
+  var refs = {
+    alert: document.getElementById('alert'),
+    alertTitle: document.getElementById('alert-title'),
+    alertDetail: document.getElementById('alert-detail'),
+    statusPill: document.getElementById('status-pill'),
+    statusText: document.getElementById('status-text'),
+    staleNote: document.getElementById('stale-note'),
+    lastRefresh: document.getElementById('last-refresh'),
+    historyWindow: document.getElementById('history-window'),
+    pollCadence: document.getElementById('poll-cadence'),
+    scoreSuccessRate: document.getElementById('score-success-rate'),
+    scoreRPM: document.getElementById('score-rpm'),
+    scorePromptRate: document.getElementById('score-prompt-rate'),
+    scoreCompletionRate: document.getElementById('score-completion-rate'),
+    mixActive: document.getElementById('mix-active'),
+    mixStreams: document.getElementById('mix-streams'),
+    throughputPoints: document.getElementById('throughput-points'),
+    successRateBadge: document.getElementById('success-rate-badge'),
+    summaryPromptTotal: document.getElementById('summary-prompt-total'),
+    summaryCompletionTotal: document.getElementById('summary-completion-total'),
+    summaryPeakThroughput: document.getElementById('summary-peak-throughput'),
+    summarySuccesses: document.getElementById('summary-successes'),
+    summaryFailures: document.getElementById('summary-failures'),
+    summaryStreamShare: document.getElementById('summary-stream-share'),
+    uptime: document.getElementById('s-uptime'),
+    connections: document.getElementById('s-conns'),
+    requests: document.getElementById('s-requests'),
+    promptTokens: document.getElementById('s-prompt-tokens'),
+    completionTokens: document.getElementById('s-completion-tokens'),
+    failures: document.getElementById('s-failures'),
+    modelBody: document.getElementById('model-body'),
+    modelCount: document.getElementById('model-count'),
+    interval: document.getElementById('interval-label'),
+    themeToggle: document.getElementById('theme-toggle')
+  };
 
-/* ---------- chart defaults ---------- */
-var cOpts={
-  responsive:true,maintainAspectRatio:false,animation:{duration:400},
-  scales:{
-    x:{grid:{color:'#27272a'},ticks:{color:'#71717a',maxTicksLimit:10,maxRotation:0}},
-    y:{beginAtZero:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}}
-  },
-  plugins:{legend:{labels:{color:'#a1a1aa',font:{size:11},boxWidth:10}}},
-  interaction:{mode:'index',intersect:false}
-};
+  refs.historyWindow.textContent = formatDurationLabel(HISTORY_MINUTES);
+  refs.pollCadence.textContent = Math.round(POLL_MS / 1000) + 's';
+  refs.interval.textContent = Math.round(POLL_MS / 1000);
 
-var tokCh=new Chart(document.getElementById('chart-tokens'),{
-  type:'line',data:{labels:[],datasets:[
-    {label:'Prompt tokens',data:[],borderColor:'#38bdf8',backgroundColor:'#38bdf822',fill:true,tension:.35,pointRadius:0},
-    {label:'Completion tokens',data:[],borderColor:'#f472b6',backgroundColor:'#f472b622',fill:true,tension:.35,pointRadius:0}
-  ]},options:cOpts});
+  initTheme();
 
-var sucCh=new Chart(document.getElementById('chart-success'),{
-  type:'bar',data:{labels:[],datasets:[
-    {label:'Success',data:[],backgroundColor:'#22c55e'},{label:'Failed',data:[],backgroundColor:'#ef4444'}
-  ]},options:Object.assign({},cOpts,{
-    scales:Object.assign({},cOpts.scales,{
-      x:{stacked:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}},
-      y:{stacked:true,beginAtZero:true,grid:{color:'#27272a'},ticks:{color:'#71717a'}}
-    })
-  })});
+  var tokenChart = createTokenChart(document.getElementById('chart-tokens'));
+  var successChart = createSuccessChart(document.getElementById('chart-success'));
+  var connSpark = createConnectionSpark(document.getElementById('spark-conns'));
 
-function pushDuo(ch,label,v1,v2){
-  while(ch.data.labels.length>=SLICE){ch.data.labels.shift();ch.data.datasets.forEach(function(d){d.data.shift()})}
-  ch.data.labels.push(label);ch.data.datasets[0].data.push(v1);ch.data.datasets[1].data.push(v2);ch.update('none');
-}
-
-/* ---------- resize observer for reliable chart heights ---------- */
-function syncSizes(){
-  document.querySelectorAll('.chart-wrap canvas').forEach(function(c){
-    var p=c.parentElement;var w=p.clientWidth;if(w>0)c.height=Math.round(p.clientHeight);
+  document.querySelectorAll('th[data-col]').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col = th.getAttribute('data-col');
+      if (sortState.col === col) {
+        sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortState.col = col;
+        sortState.dir = col === 'name' ? 'asc' : 'desc';
+      }
+      renderModels();
+    });
   });
-}
-window.addEventListener('resize',syncSizes);
-if(typeof ResizeObserver!=='undefined'){new ResizeObserver(syncSizes).observe(document.querySelector('.charts-grid')||document.body)}
-else setTimeout(syncSizes,200);
 
-/* ---------- data fetch ---------- */
-var modelCache={};
-var prevTokens=null;
+  tick();
+  window.setInterval(tick, POLL_MS);
 
-async function tick(){
-  try{
-    var[s,h]=await Promise.all([
-      fetch('/_tap/dashboard/api/snapshot').then(function(r){return r.json()}),
-      fetch('/_tap/dashboard/api/history?minutes=60').then(function(r){return r.json()})
-    ]);
-    if(s){
-      document.getElementById('s-uptime').textContent=s.uptime||'—';
-      document.getElementById('s-conns').textContent=s.active_connections!=null?s.active_connections:'—';
-      document.getElementById('s-requests').textContent=(s.total_requests||0).toLocaleString();
-      document.getElementById('s-prompt-tokens').textContent=fmtTokens(s.total_prompt_tokens||0);
-      document.getElementById('s-completion-tokens').textContent=fmtTokens(s.total_completion_tokens||0);
+  async function tick() {
+    if (pollInFlight) {
+      return;
+    }
+    pollInFlight = true;
 
-      var sc=s.streaming_connections||0,nc=s.non_streaming_connections||0;
-      if(sc>0)document.getElementById('s-streaming').textContent=sc+'+'+nc;
-      else document.getElementById('s-streaming').textContent='—';
+    try {
+      var payload = await fetchAll();
+      renderSnapshot(payload.snapshot, payload.history);
+      modelCache = payload.models || {};
+      renderModels();
+      setHealthyState(payload.snapshot.timestamp);
+    } catch (err) {
+      setErrorState(err);
+    } finally {
+      pollInFlight = false;
+    }
+  }
+
+  async function fetchAll() {
+    var urls = [
+      '/_tap/dashboard/api/snapshot',
+      '/_tap/dashboard/api/history?minutes=' + HISTORY_MINUTES + '&points=' + HISTORY_POINTS,
+      '/_tap/dashboard/api/models'
+    ];
+
+    var responses = await Promise.all(urls.map(fetchJSON));
+    return {
+      snapshot: responses[0],
+      history: Array.isArray(responses[1]) ? responses[1] : [],
+      models: responses[2] || {}
+    };
+  }
+
+  async function fetchJSON(url) {
+    var response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error(url + ' returned HTTP ' + response.status);
+    }
+    return response.json();
+  }
+
+  function renderSnapshot(snapshot, history) {
+    refs.uptime.textContent = snapshot.uptime || '--';
+    refs.connections.textContent = formatNumber(snapshot.active_connections || 0);
+    refs.requests.textContent = formatNumber(snapshot.total_requests || 0);
+    refs.promptTokens.textContent = compactNumber(snapshot.total_prompt_tokens || 0);
+    refs.completionTokens.textContent = compactNumber(snapshot.total_completion_tokens || 0);
+    refs.failures.textContent = formatNumber(snapshot.failed_requests || 0);
+    refs.mixActive.textContent = formatNumber(snapshot.active_connections || 0);
+    refs.mixStreams.textContent = formatNumber(snapshot.active_streaming_connections || 0);
+
+    sparklinePoints.push(snapshot.active_connections || 0);
+    if (sparklinePoints.length > CONN_SPARK_LIMIT) {
+      sparklinePoints.shift();
+    }
+    connSpark.data.labels = sparklinePoints.map(function (_, index) { return index; });
+    connSpark.data.datasets[0].data = sparklinePoints.slice();
+    connSpark.update('none');
+
+    renderHistory(history);
+  }
+
+  function renderHistory(history) {
+    var labels = history.map(function (entry) {
+      return formatClock(entry.timestamp);
+    });
+    var promptSeries = [];
+    var completionSeries = [];
+    var successSeries = [];
+    var failureSeries = [];
+    var totalPrompt = 0;
+    var totalCompletion = 0;
+    var totalSuccess = 0;
+    var totalFailure = 0;
+    var totalStreaming = 0;
+    var totalRequests = 0;
+    var totalBucketSeconds = 0;
+    var peakThroughput = 0;
+
+    history.forEach(function (entry) {
+      var promptRate = perSecond(entry.prompt_tokens_delta || 0, entry.bucket_seconds);
+      var completionRate = perSecond(entry.completion_tokens_delta || 0, entry.bucket_seconds);
+      var successCount = entry.successful_delta || 0;
+      var failureCount = entry.failures_delta || 0;
+      var streamingCount = entry.streaming_delta || 0;
+      var requestCount = entry.total_reqs_delta || 0;
+      var bucketSeconds = entry.bucket_seconds || (POLL_MS / 1000);
+
+      promptSeries.push(roundOne(promptRate));
+      completionSeries.push(roundOne(completionRate));
+      successSeries.push(successCount);
+      failureSeries.push(failureCount);
+
+      totalPrompt += entry.prompt_tokens_delta || 0;
+      totalCompletion += entry.completion_tokens_delta || 0;
+      totalSuccess += successCount;
+      totalFailure += failureCount;
+      totalStreaming += streamingCount;
+      totalRequests += requestCount;
+      totalBucketSeconds += bucketSeconds;
+      peakThroughput = Math.max(peakThroughput, promptRate + completionRate);
+    });
+
+    tokenChart.data.labels = labels;
+    tokenChart.data.datasets[0].data = promptSeries;
+    tokenChart.data.datasets[1].data = completionSeries;
+    tokenChart.update('none');
+
+    successChart.data.labels = labels;
+    successChart.data.datasets[0].data = successSeries;
+    successChart.data.datasets[1].data = failureSeries;
+    successChart.update('none');
+
+    var requestTotal = totalSuccess + totalFailure;
+    var successRate = requestTotal > 0 ? (totalSuccess / requestTotal) * 100 : 100;
+    var streamShare = totalRequests > 0 ? (totalStreaming / totalRequests) * 100 : 0;
+    var minutesInView = Math.max(totalBucketSeconds / 60, 1);
+    var reqPerMinute = totalRequests / minutesInView;
+    var promptPerSecond = totalPrompt / Math.max(totalBucketSeconds, 1);
+    var completionPerSecond = totalCompletion / Math.max(totalBucketSeconds, 1);
+
+    refs.scoreSuccessRate.textContent = formatPercent(successRate);
+    refs.scoreRPM.textContent = roundOne(reqPerMinute).toLocaleString();
+    refs.scorePromptRate.textContent = roundOne(promptPerSecond).toLocaleString();
+    refs.scoreCompletionRate.textContent = roundOne(completionPerSecond).toLocaleString();
+    refs.throughputPoints.textContent = history.length + ' points';
+    refs.successRateBadge.textContent = formatPercent(successRate) + ' success';
+    refs.summaryPromptTotal.textContent = compactNumber(totalPrompt);
+    refs.summaryCompletionTotal.textContent = compactNumber(totalCompletion);
+    refs.summaryPeakThroughput.textContent = roundOne(peakThroughput).toLocaleString() + '/s';
+    refs.summarySuccesses.textContent = formatNumber(totalSuccess);
+    refs.summaryFailures.textContent = formatNumber(totalFailure);
+    refs.summaryStreamShare.textContent = formatPercent(streamShare);
+  }
+
+  function renderModels() {
+    var entries = Object.entries(modelCache || {});
+    refs.modelCount.textContent = entries.length + (entries.length === 1 ? ' model' : ' models');
+    if (!entries.length) {
+      refs.modelBody.innerHTML = '<tr><td colspan="5" class="muted">No model usage recorded yet.</td></tr>';
+      updateSortIndicators();
+      return;
     }
 
-    if(h&&h.length){
-      for(var i=0;i<h.length;i++)h[i].label=new Date(h[i].timestamp).toLocaleTimeString();
+    entries.sort(function (a, b) {
+      var leftName = a[0];
+      var rightName = b[0];
+      var left = a[1] || {};
+      var right = b[1] || {};
+      var leftValue = sortState.col === 'name' ? leftName : (left[sortState.col] || 0);
+      var rightValue = sortState.col === 'name' ? rightName : (right[sortState.col] || 0);
 
-      var pArr=[],cArr=[];
-      for(var i=0;i<h.length;i++){
-        var d=h[i];
-        // Estimate prompt tokens as roughly half of total request delta (heuristic)
-        // and completion tokens from the difference.  When real token deltas are
-        // available we swap these in. For now, split evenly as a proxy.
-        pArr.push(Math.round((d.streaming_delta||0)+(d.non_streaming_delta||0)));
-        cArr.push(d.successful_delta!=null?d.successful_delta:d.streaming_delta!=null?(d.streaming_delta||0):0);
+      if (typeof leftValue === 'string') {
+        return sortState.dir === 'asc' ? leftValue.localeCompare(rightValue) : rightValue.localeCompare(leftValue);
       }
-      tokCh.data.labels=h.map(function(d){return d.label});
-      tokCh.data.datasets[0].data=pArr;
-      tokCh.data.datasets[1].data=cArr;
-      tokCh.update('none');
+      return sortState.dir === 'asc' ? leftValue - rightValue : rightValue - leftValue;
+    });
 
-      var sucs=[],fals=[];
-      for(var i=0;i<h.length;i++){
-        sucs.push(h[i].successful_delta!=null?h[i].successful_delta:0);
-        fals.push(h[i].failures_delta!=null?h[i].failures_delta:0);
+    refs.modelBody.innerHTML = entries.slice(0, 100).map(function (pair, index) {
+      var name = escapeHTML(pair[0]);
+      var usage = pair[1] || {};
+      var rowClass = index < 3 ? ' class="top-row"' : '';
+      return '<tr' + rowClass + '>' +
+        '<td class="model-name">' + name + '</td>' +
+        '<td class="num">' + formatNumber(usage.prompt_tokens || 0) + '</td>' +
+        '<td class="num">' + formatNumber(usage.completion_tokens || 0) + '</td>' +
+        '<td class="num">' + formatNumber(usage.total_tokens || 0) + '</td>' +
+        '<td class="num">' + formatNumber(usage.request_count || 0) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    updateSortIndicators();
+  }
+
+  function updateSortIndicators() {
+    document.querySelectorAll('th[data-col]').forEach(function (th) {
+      var col = th.getAttribute('data-col');
+      if (col === sortState.col) {
+        th.classList.add('sorted');
+        th.setAttribute('data-indicator', sortState.dir === 'asc' ? '↑' : '↓');
+      } else {
+        th.classList.remove('sorted');
+        th.removeAttribute('data-indicator');
       }
-      sucCh.data.labels=h.map(function(d){return d.label});
-      sucCh.data.datasets[0].data=sucs;sucCh.data.datasets[1].data=fals;
-      sucCh.update('none');
+    });
+  }
 
-      // Trigger re-layout now that charts have data
-      setTimeout(syncSizes,50);
+  function setHealthyState(timestamp) {
+    lastSuccessfulRefresh = Date.now();
+    refs.alert.classList.remove('visible');
+    refs.statusPill.className = 'status-pill live';
+    refs.statusText.textContent = 'Live';
+    refs.staleNote.textContent = 'Fresh data';
+    refs.lastRefresh.textContent = timestamp ? formatTimestamp(timestamp) : formatTimestamp(new Date().toISOString());
+  }
+
+  function setErrorState(err) {
+    var staleFor = lastSuccessfulRefresh ? Math.floor((Date.now() - lastSuccessfulRefresh) / 1000) : null;
+    refs.alert.classList.add('visible');
+    refs.alertTitle.textContent = staleFor && staleFor > 0 ? 'Using previous data' : 'Connection interrupted';
+    refs.alertDetail.textContent = err && err.message ? err.message : 'Dashboard API request failed.';
+
+    if (staleFor && staleFor > 15) {
+      refs.statusPill.className = 'status-pill stale';
+      refs.statusText.textContent = 'Stale';
+      refs.staleNote.textContent = 'Last successful refresh ' + formatRelativeSeconds(staleFor) + ' ago';
+    } else {
+      refs.statusPill.className = 'status-pill error';
+      refs.statusText.textContent = 'Retrying';
+      refs.staleNote.textContent = 'Trying to recover connection';
     }
-  }catch(e){}
-}
+  }
 
-function updateModels(){
-  fetch('/_tap/dashboard/api/models').then(function(r){return r.json()}).then(function(d){
-    if(!d||!Object.keys(d).length){document.getElementById('model-body').innerHTML='<tr><td colspan="5" style="color:#52525b;padding:1rem;text-align:center">No usage data yet</td></tr>';return}
-    modelCache=d;
-    var rows=Object.entries(d).sort(function(a,b){return(b[1].total_tokens||0)-(a[1].total_tokens||0)}).slice(0,50);
-    document.getElementById('model-body').innerHTML=rows.map(function(e){var n=e[0],u=e[1];return'<tr><td style="color:#fff;font-weight:500">'+esc(n)+'</td><td class="num" style="color:#38bdf8">'+(u.prompt_tokens||0).toLocaleString()+'</td><td class="num" style="color:#f472b6">'+(u.completion_tokens||0).toLocaleString()+'</td><td class="num" style="font-weight:600;color:#f59e0b">'+(u.total_tokens||0).toLocaleString()+'</td><td class="num">'+(u.request_count||0)+'</td></tr>'}).join('');
-  }).catch(function(){document.getElementById('model-body').innerHTML='<tr><td colspan="5" style="color:#ef4444;padding:1rem;text-align:center">Failed to load</td></tr>';});
-}
+  function initTheme() {
+    var stored = localStorage.getItem('ollama-tap-theme');
+    var preferred = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', stored || preferred);
+    refs.themeToggle.addEventListener('click', function () {
+      var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('ollama-tap-theme', next);
+      applyChartTheme();
+    });
+  }
 
-tick();setInterval(tick,INTVL);updateModels();setInterval(updateModels,INTVL);
+  function themeColors() {
+    var styles = getComputedStyle(document.documentElement);
+    return {
+      textSoft: styles.getPropertyValue('--text-soft').trim(),
+      grid: styles.getPropertyValue('--grid').trim(),
+      accent: styles.getPropertyValue('--accent').trim(),
+      blue: styles.getPropertyValue('--blue').trim(),
+      rose: styles.getPropertyValue('--rose').trim(),
+      green: styles.getPropertyValue('--green').trim(),
+      red: styles.getPropertyValue('--red').trim()
+    };
+  }
+
+  function applyChartTheme() {
+    var colors = themeColors();
+    tokenChart.data.datasets[0].borderColor = colors.blue;
+    tokenChart.data.datasets[1].borderColor = colors.rose;
+    tokenChart.options.plugins.legend.labels.color = colors.textSoft;
+    tokenChart.options.scales.x.ticks.color = colors.textSoft;
+    tokenChart.options.scales.y.ticks.color = colors.textSoft;
+    tokenChart.options.scales.x.grid.color = colors.grid;
+    tokenChart.options.scales.y.grid.color = colors.grid;
+
+    successChart.data.datasets[0].backgroundColor = colors.green;
+    successChart.data.datasets[1].backgroundColor = colors.red;
+    successChart.options.plugins.legend.labels.color = colors.textSoft;
+    successChart.options.scales.x.ticks.color = colors.textSoft;
+    successChart.options.scales.y.ticks.color = colors.textSoft;
+    successChart.options.scales.x.grid.color = colors.grid;
+    successChart.options.scales.y.grid.color = colors.grid;
+
+    connSpark.data.datasets[0].borderColor = colors.accent;
+
+    tokenChart.update('none');
+    successChart.update('none');
+    connSpark.update('none');
+  }
+
+  function createTokenChart(canvas) {
+    var colors = themeColors();
+    return new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'Prompt tokens / s',
+            data: [],
+            borderColor: colors.blue,
+            backgroundColor: 'rgba(56,189,248,0.18)',
+            fill: true,
+            tension: 0.34,
+            pointRadius: 0,
+            borderWidth: 2
+          },
+          {
+            label: 'Completion tokens / s',
+            data: [],
+            borderColor: colors.rose,
+            backgroundColor: 'rgba(244,114,182,0.12)',
+            fill: true,
+            tension: 0.34,
+            pointRadius: 0,
+            borderWidth: 2
+          }
+        ]
+      },
+      options: baseChartOptions(true)
+    });
+  }
+
+  function createSuccessChart(canvas) {
+    var colors = themeColors();
+    var options = baseChartOptions(false);
+    options.scales.x.stacked = true;
+    options.scales.y.stacked = true;
+    options.scales.y.beginAtZero = true;
+
+    return new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Success', data: [], backgroundColor: colors.green, borderRadius: 6, maxBarThickness: 18 },
+          { label: 'Failures', data: [], backgroundColor: colors.red, borderRadius: 6, maxBarThickness: 18 }
+        ]
+      },
+      options: options
+    });
+  }
+
+  function createConnectionSpark(canvas) {
+    return new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{ data: [], borderColor: themeColors().accent, pointRadius: 0, tension: 0.35, borderWidth: 2, fill: false }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: { x: { display: false }, y: { display: false } }
+      }
+    });
+  }
+
+  function baseChartOptions(beginAtZero) {
+    var colors = themeColors();
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          labels: {
+            color: colors.textSoft,
+            usePointStyle: true,
+            boxWidth: 10,
+            boxHeight: 10
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: colors.textSoft, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+          grid: { color: colors.grid, drawBorder: false }
+        },
+        y: {
+          beginAtZero: beginAtZero,
+          ticks: {
+            color: colors.textSoft,
+            callback: function (value) { return compactNumber(value); }
+          },
+          grid: { color: colors.grid, drawBorder: false }
+        }
+      }
+    };
+  }
+
+  function formatNumber(value) {
+    return Number(value || 0).toLocaleString();
+  }
+
+  function compactNumber(value) {
+    var num = Number(value || 0);
+    if (num >= 1000000000) return (num / 1000000000).toFixed(1) + 'B';
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toLocaleString();
+  }
+
+  function roundOne(value) {
+    return Math.round((value || 0) * 10) / 10;
+  }
+
+  function formatPercent(value) {
+    return roundOne(value) + '%';
+  }
+
+  function formatClock(timestamp) {
+    var date = new Date(timestamp);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function formatTimestamp(timestamp) {
+    var date = new Date(timestamp);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function formatRelativeSeconds(seconds) {
+    if (seconds < 60) return seconds + 's';
+    var minutes = Math.floor(seconds / 60);
+    return minutes + 'm';
+  }
+
+  function formatDurationLabel(minutes) {
+    if (minutes >= 60) {
+      var hours = minutes / 60;
+      return (hours % 1 === 0 ? hours : roundOne(hours)) + 'h';
+    }
+    return minutes + 'm';
+  }
+
+  function perSecond(total, bucketSeconds) {
+    var seconds = bucketSeconds || (POLL_MS / 1000);
+    return seconds > 0 ? total / seconds : 0;
+  }
+
+  function escapeHTML(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+})();
 </script>
 </body>
 </html>
