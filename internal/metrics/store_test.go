@@ -5,9 +5,17 @@ import (
 	"time"
 )
 
+// testLogDir returns a fresh temp directory for each test, so persistence
+// doesn't leak between runs. The file is cleaned up automatically by t.Cleanup.
+func testLogDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	return d
+}
+
 func TestRingStore_Snapshot_Early(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil, "/tmp")
+	store := NewRingStore(m, nil, testLogDir(t))
 	defer store.Stop()
 
 	snap := store.Snapshot()
@@ -21,7 +29,7 @@ func TestRingStore_Snapshot_Early(t *testing.T) {
 
 func TestRingStore_History_Early(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil, "/tmp")
+	store := NewRingStore(m, nil, testLogDir(t))
 	defer store.Stop()
 
 	hist := store.History(1)
@@ -34,7 +42,7 @@ func TestRingStore_History_AfterTicks(t *testing.T) {
 	m := New()
 	tracker := NewModelUsageTracker()
 	defer tracker.Stop()
-	store := NewRingStore(m, tracker, "/tmp")
+	store := NewRingStore(m, tracker, testLogDir(t))
 	defer store.Stop()
 
 	// Trigger a tick so history has data
@@ -77,7 +85,7 @@ func TestRingStore_History_AfterTicks(t *testing.T) {
 
 func TestRingStore_Stop(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil, "/tmp")
+	store := NewRingStore(m, nil, testLogDir(t))
 
 	store.Stop()
 
@@ -89,7 +97,7 @@ func TestRingStore_Stop(t *testing.T) {
 
 func TestRingStore_History_ManyMinutes(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil, "/tmp")
+	store := NewRingStore(m, nil, testLogDir(t))
 	defer store.Stop()
 
 	store.Tick()
@@ -103,7 +111,7 @@ func TestRingStore_History_ManyMinutes(t *testing.T) {
 
 func TestRingStore_History_ZeroMinutes(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil, "/tmp")
+	store := NewRingStore(m, nil, testLogDir(t))
 	defer store.Stop()
 
 	hist := store.History(0)
@@ -114,7 +122,7 @@ func TestRingStore_History_ZeroMinutes(t *testing.T) {
 
 func TestRingStore_ConcurrentTicks(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil, "/tmp")
+	store := NewRingStore(m, nil, testLogDir(t))
 	defer store.Stop()
 
 	for i := 0; i < 20; i++ {
@@ -133,7 +141,7 @@ func TestRingStore_ConcurrentTicks(t *testing.T) {
 
 func TestRingStore_History_StructuralIntegrity(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil, "/tmp")
+	store := NewRingStore(m, nil, testLogDir(t))
 	defer store.Stop()
 
 	store.Tick()
@@ -157,7 +165,7 @@ func TestRingStore_HistorySeries_CompressesToMaxPoints(t *testing.T) {
 	m := New()
 	tracker := NewModelUsageTracker()
 	defer tracker.Stop()
-	store := NewRingStore(m, tracker, "/tmp")
+	store := NewRingStore(m, tracker, testLogDir(t))
 	defer store.Stop()
 
 	store.Tick()
@@ -194,9 +202,43 @@ func TestRingStore_HistorySeries_CompressesToMaxPoints(t *testing.T) {
 
 func TestRingStore_NewReturnsNotNil(t *testing.T) {
 	m := New()
-	store := NewRingStore(m, nil, "/tmp")
+	store := NewRingStore(m, nil, testLogDir(t))
 	if store == nil {
 		t.Fatal("NewRingStore returned nil")
 	}
 	store.Stop()
+}
+
+// TestRingStore_PersistAndRecover verifies that persisted history survives a restart.
+func TestRingStore_PersistAndRecover(t *testing.T) {
+	m := New()
+	tracker := NewModelUsageTracker()
+	defer tracker.Stop()
+	dir := testLogDir(t)
+	store := NewRingStore(m, tracker, dir)
+
+	// Record some data via ticks
+	for i := 0; i < 5; i++ {
+		m.RecordRequest(1*time.Millisecond, false)
+		tracker.Record("qwen", 10, 20)
+		store.Tick()
+	}
+
+	// Close the store (simulates shutdown)
+	store.Stop()
+
+	// Restart with a fresh Metrics but same logDir
+	m2 := New()
+	store2 := NewRingStore(m2, tracker, dir)
+	defer store2.Stop()
+
+	hist := store2.History(10)
+	if len(hist) < 3 {
+		t.Fatalf("expected some recovered history entries after restart, got %d", len(hist))
+	}
+	for _, e := range hist {
+		if !e.Timestamp.After(time.Now().Add(-persistenceWindow)) {
+			t.Errorf("recovered entry timestamp outside persistence window: %v", e.Timestamp)
+		}
+	}
 }

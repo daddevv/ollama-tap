@@ -29,14 +29,14 @@ type RingStore struct {
 }
 
 type snapshotSlot struct {
-	timestamp        time.Time
-	totalReqs        int64
-	streaming        int64
-	nonStreaming     int64
-	failures         int64
-	activeConns      int64
-	promptTokens     int64
-	completionTokens int64
+	Timestamp        time.Time
+	TotalReqs        int64
+	Streaming        int64
+	NonStreaming     int64
+	Failures         int64
+	ActiveConns      int64
+	PromptTokens     int64
+	CompletionTokens int64
 }
 
 // HistoryEntry is a delta snapshot suitable for chart rendering.
@@ -117,14 +117,14 @@ func (s *RingStore) tick() {
 	idx := ((s.head.Add(1)+s.size)%s.size + s.size) % s.size
 
 	slot := snapshotSlot{
-		timestamp:        time.Now().UTC(),
-		totalReqs:        m.totalRequests.Load(),
-		streaming:        int64(m.streamingCount.Load()),
-		nonStreaming:     int64(m.nonStreamingCount.Load()),
-		failures:         m.failedRequests.Load(),
-		activeConns:      m.activeConnections.Load(),
-		promptTokens:     totals.PromptTokens,
-		completionTokens: totals.CompletionTokens,
+		Timestamp:        time.Now().UTC(),
+		TotalReqs:        m.totalRequests.Load(),
+		Streaming:        int64(m.streamingCount.Load()),
+		NonStreaming:     int64(m.nonStreamingCount.Load()),
+		Failures:         m.failedRequests.Load(),
+		ActiveConns:      m.activeConnections.Load(),
+		PromptTokens:     totals.PromptTokens,
+		CompletionTokens: totals.CompletionTokens,
 	}
 
 	s.mu.Lock()
@@ -159,7 +159,7 @@ func (s *RingStore) Snapshot() map[string]interface{} {
 	var bufTS time.Time
 	if head >= 0 {
 		bufSlot := s.buffer[((head%int64(len(s.buffer)))+int64(len(s.buffer)))%int64(len(s.buffer))]
-		bufTS = bufSlot.timestamp
+		bufTS = bufSlot.Timestamp
 	}
 	return map[string]interface{}{
 		"timestamp":          bufTS,
@@ -176,7 +176,7 @@ func (s *RingStore) LatestSlot() (snapshotSlot, bool) {
 		return snapshotSlot{}, false
 	}
 	slot := s.buffer[((head%int64(len(s.buffer)))+int64(len(s.buffer)))%int64(len(s.buffer))]
-	if slot.timestamp.IsZero() {
+	if slot.Timestamp.IsZero() {
 		return snapshotSlot{}, false
 	}
 	return slot, true
@@ -207,7 +207,7 @@ func (s *RingStore) History(nMinutes int) []HistoryEntry {
 	for i := validStart; i <= head; i++ {
 		rawIdx := ((i % slotLen) + slotLen) % slotLen
 		slot := s.buffer[rawIdx]
-		if slot.timestamp.IsZero() {
+		if slot.Timestamp.IsZero() {
 			continue
 		}
 		entries = append(entries, slot)
@@ -216,8 +216,8 @@ func (s *RingStore) History(nMinutes int) []HistoryEntry {
 	deltaEntries := make([]HistoryEntry, 0, len(entries))
 	for i, e := range entries {
 		delta := HistoryEntry{
-			Label:         e.timestamp.Format("15:04:05"),
-			Timestamp:     e.timestamp,
+			Label:         e.Timestamp.Format("15:04:05"),
+			Timestamp:     e.Timestamp,
 			BucketSeconds: s.tickSec,
 		}
 		if i == 0 {
@@ -226,21 +226,21 @@ func (s *RingStore) History(nMinutes int) []HistoryEntry {
 		}
 
 		prev := entries[i-1]
-		if e.totalReqs < prev.totalReqs || e.streaming < prev.streaming || e.nonStreaming < prev.nonStreaming || e.failures < prev.failures || e.promptTokens < prev.promptTokens || e.completionTokens < prev.completionTokens {
+		if e.TotalReqs < prev.TotalReqs || e.Streaming < prev.Streaming || e.NonStreaming < prev.NonStreaming || e.Failures < prev.Failures || e.PromptTokens < prev.PromptTokens || e.CompletionTokens < prev.CompletionTokens {
 			deltaEntries = append(deltaEntries, delta)
 			continue
 		}
 
-		delta.TotalReqs = e.totalReqs - prev.totalReqs
-		delta.Streaming = e.streaming - prev.streaming
-		delta.NonStreaming = e.nonStreaming - prev.nonStreaming
-		delta.Failures = e.failures - prev.failures
-		delta.Successful = (e.totalReqs - e.failures) - (prev.totalReqs - prev.failures)
+		delta.TotalReqs = e.TotalReqs - prev.TotalReqs
+		delta.Streaming = e.Streaming - prev.Streaming
+		delta.NonStreaming = e.NonStreaming - prev.NonStreaming
+		delta.Failures = e.Failures - prev.Failures
+		delta.Successful = (e.TotalReqs - e.Failures) - (prev.TotalReqs - prev.Failures)
 		if delta.Successful < 0 {
 			delta.Successful = 0
 		}
-		delta.PromptTokens = e.promptTokens - prev.promptTokens
-		delta.CompletionTokens = e.completionTokens - prev.completionTokens
+		delta.PromptTokens = e.PromptTokens - prev.PromptTokens
+		delta.CompletionTokens = e.CompletionTokens - prev.CompletionTokens
 		deltaEntries = append(deltaEntries, delta)
 	}
 
@@ -311,7 +311,7 @@ func loadHistory(logDir string) ([]snapshotSlot, error) {
 	cutoff := time.Now().Add(-persistenceWindow)
 	var result []snapshotSlot
 	for _, s := range all {
-		if !s.timestamp.IsZero() && s.timestamp.After(cutoff) {
+		if !s.Timestamp.IsZero() && s.Timestamp.After(cutoff) {
 			result = append(result, s)
 		}
 	}
@@ -329,7 +329,7 @@ func (s *RingStore) loadHistory(entries []snapshotSlot) {
 	slotLen := int64(len(s.buffer))
 	for i, e := range entries {
 		rawIdx := int64(i) % slotLen
-		e.timestamp = e.timestamp.UTC()
+		e.Timestamp = e.Timestamp.UTC()
 		s.buffer[rawIdx] = e
 	}
 }
