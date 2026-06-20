@@ -135,3 +135,25 @@ func TestModelUsageTracker_SnapshotReturnsCopy(t *testing.T) {
 		t.Errorf("snap2 total_tokens should be 450, got %d", snap2["test"].TotalTokens)
 	}
 }
+
+func TestModelUsageTracker_RecordRequestAndTokensSeparately(t *testing.T) {
+	tracker := NewModelUsageTracker()
+
+	tracker.RecordRequest("qwen")
+	tracker.RecordTokens("qwen", 12, 34)
+
+	snap := tracker.Snapshot()
+	u := snap["qwen"]
+	if u.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", u.RequestCount)
+	}
+	if u.PromptTokens != 12 {
+		t.Fatalf("prompt_tokens: got %d, want 12", u.PromptTokens)
+	}
+	if u.CompletionTokens != 34 {
+		t.Fatalf("completion_tokens: got %d, want 34", u.CompletionTokens)
+	}
+	if u.TotalTokens != 46 {
+		t.Fatalf("total_tokens: got %d, want 46", u.TotalTokens)
+	}
+}

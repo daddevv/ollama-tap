@@ -183,7 +183,7 @@ func TestNDJSONStreamMultipleChunks(t *testing.T) {
 
 	var buf bytes.Buffer
 	_, rw, fl := newBufWriter(&buf)
-	model := p.handleNDJSON(context.Background(), strings.NewReader(ndjsonInput), rw, fl, "test-id")
+	model := p.handleNDJSON(context.Background(), strings.NewReader(ndjsonInput), rw, fl, "test-id", "")
 
 	if model != "qwen3.6" {
 		t.Errorf("model = %q, want qwen3.6", model)
@@ -215,7 +215,7 @@ func TestNDJSONStreamEmptyLines(t *testing.T) {
 
 	var buf bytes.Buffer
 	_, rw, fl := newBufWriter(&buf)
-	model := p.handleNDJSON(context.Background(), strings.NewReader(ndjsonInput), rw, fl, "test-id")
+	model := p.handleNDJSON(context.Background(), strings.NewReader(ndjsonInput), rw, fl, "test-id", "")
 
 	if model != "qwen3.6" {
 		t.Errorf("model = %q, want qwen3.6", model)
@@ -227,8 +227,8 @@ func TestNDJSONStreamEmptyLines(t *testing.T) {
 			realLines = append(realLines, ln)
 		}
 	}
-	if len(realLines) != 2 {
-		t.Fatalf("got %d non-empty lines, want 2", len(realLines))
+	if len(realLines) != 3 {
+		t.Fatalf("got %d non-empty lines, want 3", len(realLines))
 	}
 }
 
@@ -248,9 +248,8 @@ not valid json at all
 				panicRecovered = true
 				t.Errorf("handleNDJSON panicked on malformed line: %v", recovered)
 			}
-			return // clear pending panic to avoid double-panic
 		}()
-		p.handleNDJSON(context.Background(), strings.NewReader(ndjsonInput), rw, fl, "test-id")
+		p.handleNDJSON(context.Background(), strings.NewReader(ndjsonInput), rw, fl, "test-id", "")
 	}()
 
 	outStr := buf.String()
@@ -263,12 +262,12 @@ func TestNDJSONStreamEmptyBody(t *testing.T) {
 	p, _ := newTestProxy(t)
 	var buf bytes.Buffer
 	_, rw, fl := newBufWriter(&buf)
-	model := p.handleNDJSON(context.Background(), strings.NewReader(""), rw, fl, "test-id")
+	model := p.handleNDJSON(context.Background(), strings.NewReader(""), rw, fl, "test-id", "")
 	if model != "" {
 		t.Errorf("model = %q, want empty", model)
 	}
-	if buf.Len() != 0 {
-		t.Errorf("expected empty output, got %q", buf.String())
+	if got := buf.String(); got != "data: [DONE]\n\n" {
+		t.Errorf("expected final done marker only, got %q", got)
 	}
 }
 
@@ -281,7 +280,7 @@ func TestNDJSONStreamLargeLine(t *testing.T) {
 
 	func() {
 		defer func() { recover() }()
-		p.handleNDJSON(context.Background(), strings.NewReader(line), rw, fl, "test-id")
+		p.handleNDJSON(context.Background(), strings.NewReader(line), rw, fl, "test-id", "")
 	}()
 
 	lines := strings.Split(buf.String(), "\n")
@@ -305,7 +304,7 @@ func TestNDJSONStreamStatsExtraction(t *testing.T) {
 
 	var buf bytes.Buffer
 	_, rw, fl := newBufWriter(&buf)
-	model := p.handleNDJSON(context.Background(), strings.NewReader(input), rw, fl, "test-id")
+	model := p.handleNDJSON(context.Background(), strings.NewReader(input), rw, fl, "test-id", "")
 
 	if model != "llama3" {
 		t.Errorf("model = %q, want llama3", model)
@@ -342,7 +341,7 @@ func TestNDJSONFlushThreshold(t *testing.T) {
 
 	func() {
 		defer func() { recover() }()
-		p.handleNDJSON(context.Background(), strings.NewReader(strings.Join(lines, "\n")), rw, fl, "flush-test")
+		p.handleNDJSON(context.Background(), strings.NewReader(strings.Join(lines, "\n")), rw, fl, "flush-test", "")
 	}()
 
 	files, _ := os.ReadDir(dir)
@@ -572,6 +571,58 @@ func TestProxyNonStreamingResponse(t *testing.T) {
 	json.Unmarshal(body, &parsed)
 	if parsed["id"] != "test-model" {
 		t.Errorf("id = %q, want %q", parsed["id"], "test-model")
+	}
+}
+
+func TestProxyNonStreamingTracksOllamaPromptAndCompletionTokens(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"qwen3.6:latest","done":true,"prompt_eval_count":8,"eval_count":15}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		ListenAddr:          ":0",
+		Upstream:            mustParse(server.URL),
+		CaptureRequests:     false,
+		CaptureResponses:    false,
+		CaptureStreamChunks: false,
+		LogDir:              t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/chat", strings.NewReader(`{"model":"qwen3.6:latest","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	snap := tracker.Snapshot()
+	usage, ok := snap["qwen3.6:latest"]
+	if !ok {
+		t.Fatal("expected qwen3.6:latest in tracker snapshot")
+	}
+	if usage.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", usage.RequestCount)
+	}
+	if usage.PromptTokens != 8 {
+		t.Fatalf("prompt_tokens: got %d, want 8", usage.PromptTokens)
+	}
+	if usage.CompletionTokens != 15 {
+		t.Fatalf("completion_tokens: got %d, want 15", usage.CompletionTokens)
+	}
+	if usage.TotalTokens != 23 {
+		t.Fatalf("total_tokens: got %d, want 23", usage.TotalTokens)
 	}
 }
 
@@ -901,6 +952,63 @@ func TestIntegrationNDJSONStreamForwarding(t *testing.T) {
 	}
 }
 
+func TestIntegrationNDJSONLargeStreamTracksFinalUsage(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	lines := make([]string, 0, 25)
+	for i := 0; i < 20; i++ {
+		lines = append(lines, fmt.Sprintf(`{"model":"llama3","content":"%s","done":false}`, strings.Repeat("x", 70000)))
+	}
+	lines = append(lines, `{"model":"llama3","done":true,"prompt_eval_count":21,"eval_count":34}`)
+
+	upstream := ndjsonUpstream(t, lines)
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		ListenAddr:          ":0",
+		Upstream:            mustParse(upstream.URL),
+		CaptureRequests:     false,
+		CaptureResponses:    false,
+		CaptureStreamChunks: false,
+		LogDir:              t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(p)
+	defer httpSrv.Close()
+
+	reqBody := `{"model":"llama3","prompt":"hello","stream":true}`
+	resp, err := http.Post(httpSrv.URL+"/api/generate", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatalf("drain body: %v", err)
+	}
+
+	snap := tracker.Snapshot()
+	usage, ok := snap["llama3"]
+	if !ok {
+		t.Fatal("expected llama3 in tracker snapshot")
+	}
+	if usage.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", usage.RequestCount)
+	}
+	if usage.PromptTokens != 21 {
+		t.Fatalf("prompt_tokens: got %d, want 21", usage.PromptTokens)
+	}
+	if usage.CompletionTokens != 34 {
+		t.Fatalf("completion_tokens: got %d, want 34", usage.CompletionTokens)
+	}
+}
+
 func TestIntegrationNDJSONEmptyChunks(t *testing.T) {
 	upstream := ndjsonUpstream(t, []string{
 		`{"model":"m","content":"x","done":false}`,
@@ -941,8 +1049,8 @@ func TestIntegrationNDJSONEmptyChunks(t *testing.T) {
 			nonEmpty++
 		}
 	}
-	if nonEmpty != 2 {
-		t.Errorf("expected 2 non-empty lines, got %d", nonEmpty)
+	if nonEmpty != 3 {
+		t.Errorf("expected 3 non-empty lines, got %d", nonEmpty)
 	}
 }
 
@@ -1387,5 +1495,63 @@ func TestV1ResponsesStreamingDetection(t *testing.T) {
 	// The [DONE] marker is added by handleSSEPassthrough when it reaches EOF
 	if !strings.Contains(bodyStr, "[DONE]") {
 		t.Logf("Note: [DONE] marker not found but streaming content is present, which indicates streaming is working")
+	}
+}
+
+func TestIntegrationSSETracksRequestModelWhenResponseOmitsModel(t *testing.T) {
+	tracker := metrics.NewModelUsageTracker()
+	defer tracker.Stop()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"index\":0}]}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		fmt.Fprintf(w, "data: {\"id\":\"c1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}}\n\n")
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		ListenAddr:          ":0",
+		Upstream:            mustParse(upstream.URL),
+		CaptureRequests:     false,
+		CaptureResponses:    false,
+		CaptureStreamChunks: false,
+		LogDir:              t.TempDir(),
+	}
+	m := metrics.New()
+	p, err := NewWithTracker(cfg, m, tracker)
+	if err != nil {
+		t.Fatalf("NewWithTracker: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(p)
+	defer httpSrv.Close()
+
+	reqBody := `{"model":"qwen3.6:latest","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	resp, err := http.Post(httpSrv.URL+"/v1/chat/completions", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatalf("drain body: %v", err)
+	}
+
+	snap := tracker.Snapshot()
+	usage, ok := snap["qwen3.6:latest"]
+	if !ok {
+		t.Fatal("expected qwen3.6:latest in tracker snapshot")
+	}
+	if usage.RequestCount != 1 {
+		t.Fatalf("request_count: got %d, want 1", usage.RequestCount)
+	}
+	if usage.PromptTokens != 11 {
+		t.Fatalf("prompt_tokens: got %d, want 11", usage.PromptTokens)
+	}
+	if usage.CompletionTokens != 7 {
+		t.Fatalf("completion_tokens: got %d, want 7", usage.CompletionTokens)
 	}
 }

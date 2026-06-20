@@ -84,6 +84,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
+	requestModel := ""
+	if p.tracker != nil && tracksModelUsage(r.URL.Path) {
+		requestModel = extractRequestModel(bodyBytes)
+		if requestModel != "" {
+			p.recordModelRequest(requestModel)
+		}
+	}
+
 	if p.cfg.CaptureRequests && len(bodyBytes) > 0 {
 		if err := p.logger.WriteRequestLog(&logging.RequestLog{
 			ID:            id,
@@ -165,11 +173,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("X-Accel-Buffering", "no")
 
-		// Buffer resp.Body so detectStreamFormat can peek at format without consuming bytes.
-		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		streamFmt = detectStreamFormatFromReader(bytes.NewReader(bodyData), resp)
+		streamBody := bufio.NewReader(resp.Body)
+		streamFmt = detectStreamFormatFromReader(streamBody, resp)
 
-		p.handleStreaming(r.Context(), w, bytes.NewReader(bodyData), id, streamType, start, streamFmt)
+		p.handleStreaming(r.Context(), w, streamBody, id, streamType, start, streamFmt, requestModel)
 	} else {
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		truncated := len(bodyData) == int(1<<20)
@@ -213,33 +220,27 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Record model usage for non-streaming responses so the tracker gets entries.
 		if len(bodyData) > 0 && p.tracker != nil {
-			var modelName string
-			if len(bodyBytes) > 0 {
-				var req struct {
-					Model string `json:"model"`
-				}
-				if err := json.Unmarshal(bodyBytes, &req); err == nil && req.Model != "" {
-					modelName = req.Model
-				}
-			}
+			modelName := requestModel
 			if modelName == "" && len(bodyData) > 0 {
 				var resp struct {
 					Model string `json:"model"`
 				}
 				if err := json.Unmarshal(bodyData, &resp); err == nil && resp.Model != "" {
 					modelName = resp.Model
+					p.recordModelRequest(modelName)
 				}
 			}
 			if modelName != "" {
 				var promptTokens, completionTokens int64
 				if r.URL.Path == "/api/generate" || r.URL.Path == "/api/chat" {
 					stats, err := parser.ParseOllamaNonStreaming(bodyData)
-					if err == nil && stats.EvalCount > 0 {
-						completionTokens = int64(stats.EvalCount)
+					if err == nil {
+						promptTokens = stats.PromptEval
+						completionTokens = stats.EvalCount
 					}
 					// Expected /v1/chat/completions response structure:
 					// {"model": "...", "usage": {"prompt_tokens": N, "completion_tokens": M, "total_tokens": N+M}}
-				} else if r.URL.Path == "/v1/chat/completions" {
+				} else if r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/generate" || r.URL.Path == "/v1/responses" {
 					usage, err := parser.ParseOpenAIChatNonStreaming(bodyData)
 					if err == nil && usage != nil {
 						promptTokens = usage.PromptTokens
@@ -379,6 +380,9 @@ func detectStreamFormat(resp *http.Response, reqPath string, reqBody []byte) str
 			}
 			break // unexpected content, not a recognized stream format
 		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("ollama-tap: stream format detection failed: %v", err)
+		}
 	}
 
 	// 3. Fallback: if the request explicitly asks for streaming, assume NDJSON
@@ -390,10 +394,9 @@ func detectStreamFormat(resp *http.Response, reqPath string, reqBody []byte) str
 	return formatUnknown
 }
 
-// detectStreamFormatFromReader determines the stream format from an io.Reader
-// (without consuming more than ~512 bytes). Used when resp.Body needs to be
-// buffered first so that detected bytes are not lost before forwarding.
-func detectStreamFormatFromReader(body io.Reader, resp *http.Response) streamFormat {
+// detectStreamFormatFromReader determines the stream format from a buffered reader
+// without consuming the previewed bytes, so the full stream remains available.
+func detectStreamFormatFromReader(body *bufio.Reader, resp *http.Response) streamFormat {
 	// 1. Check Content-Type header.
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/event-stream") {
@@ -404,7 +407,15 @@ func detectStreamFormatFromReader(body io.Reader, resp *http.Response) streamFor
 	}
 
 	// 2. Ambiguous content-type: peek at the first 512 bytes of body.
-	scanner := bufio.NewScanner(io.LimitReader(body, 512))
+	preview, err := body.Peek(512)
+	if len(preview) == 0 {
+		if err != nil && err != io.EOF {
+			log.Printf("ollama-tap: stream preview failed: %v", err)
+		}
+		return formatNDJSON
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(preview))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -419,6 +430,9 @@ func detectStreamFormatFromReader(body io.Reader, resp *http.Response) streamFor
 			return formatNDJSON
 		}
 		break // unexpected content, not a recognized stream format
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		log.Printf("ollama-tap: buffered stream format detection failed: %v", scanErr)
 	}
 
 	// 3. Fallback: default to NDJSON (Ollama streaming typically uses NDJSON).
@@ -459,7 +473,7 @@ func isRequestStream(path string, body []byte) bool {
 }
 
 // handleStreaming forwards the upstream response body incrementally while extracting usage stats.
-func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time, sfmt streamFormat) {
+func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body io.Reader, id string, streamType string, start time.Time, sfmt streamFormat, requestModel string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("ollama-tap: streaming panic recovered for %s: %v", id, r)
@@ -475,9 +489,9 @@ func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body
 	var statsModel string
 	switch sfmt {
 	case formatSSE:
-		statsModel = p.handleSSEPassthrough(ctx, body, w, flusher, id)
+		statsModel = p.handleSSEPassthrough(ctx, body, w, flusher, id, requestModel)
 	case formatNDJSON:
-		statsModel = p.handleNDJSON(ctx, body, w, flusher, id)
+		statsModel = p.handleNDJSON(ctx, body, w, flusher, id, requestModel)
 	default:
 		// Unknown format — pass through as-is to avoid breaking the stream.
 		io.Copy(w, body)
@@ -501,11 +515,13 @@ const (
 // handleSSEPassthrough forwards an SSE-formatted response body to the client.
 // It preserves the original "data: <json>" format so clients like Codex
 // can parse the SSE stream correctly (no stripping of prefixes or separators).
-func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
+func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string, requestModel string) string {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 
 	var model string
+	trackedModel := requestModel
+	sawDoneMarker := false
 	var chunks []*logging.StreamChunk
 
 	for scanner.Scan() {
@@ -530,6 +546,11 @@ func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http
 			continue
 		}
 		dataStr := strings.TrimPrefix(line, "data: ")
+		if dataStr == "[DONE]" {
+			sawDoneMarker = true
+			flusher.Flush()
+			continue
+		}
 		obj, ok := parser.ParseOpenAISSEEvent("data: " + dataStr)
 		if !ok {
 			flusher.Flush()
@@ -540,24 +561,30 @@ func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http
 		if m := parser.ParseResponsesModel(obj); m != "" && model == "" {
 			model = m
 		}
+		if trackedModel == "" && model != "" {
+			trackedModel = model
+			p.recordModelRequest(trackedModel)
+		}
 
 		// Build chunk records for logging (mirrors handleSSE logic).
 		if parser.IsUsageEvent(obj) {
 			usage := parser.ParseOpenAIUsage(obj)
-			p.recordModelUsage(model, usage.PromptTokens, usage.CompletionTokens)
-			chunks = append(chunks, &logging.StreamChunk{
-				ID:        id,
-				ChunkType: "usage",
-				Model:     model,
-				TokenCnt:  usage.CompletionTokens,
-				Done:      true,
-				Time:      time.Now().UTC().Format(time.RFC3339Nano),
-			})
+			if usage != nil {
+				p.recordModelUsage(trackedModel, usage.PromptTokens, usage.CompletionTokens)
+				chunks = append(chunks, &logging.StreamChunk{
+					ID:        id,
+					ChunkType: "usage",
+					Model:     trackedModel,
+					TokenCnt:  usage.CompletionTokens,
+					Done:      true,
+					Time:      time.Now().UTC().Format(time.RFC3339Nano),
+				})
+			}
 		} else if delta, _ := parser.ExtractDelta(obj); delta != "" {
 			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "text",
-				Model:     model,
+				Model:     trackedModel,
 				Delta:     delta[:min(len(delta), 512)],
 				Time:      time.Now().UTC().Format(time.RFC3339Nano),
 			})
@@ -565,7 +592,7 @@ func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http
 			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "text",
-				Model:     model,
+				Model:     trackedModel,
 				Delta:     dataStr[:min(len(dataStr), 512)],
 				Time:      time.Now().UTC().Format(time.RFC3339Nano),
 			})
@@ -585,17 +612,26 @@ func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http
 	if len(chunks) > 0 {
 		p.logger.WriteStreamChunks(chunks)
 	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("ollama-tap: SSE stream scan failed for %s: %v", id, err)
+	}
 
 	// Send [DONE] marker so SSE clients (github.copilot-chat, OpenAI SDK) know the stream completed.
-	w.Write([]byte("data: [DONE]\n\n"))
-	flusher.Flush()
+	if !sawDoneMarker {
+		w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}
 
+	if trackedModel != "" {
+		return trackedModel
+	}
 	return model
 }
-func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
+func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string, requestModel string) string {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	var model string
+	trackedModel := requestModel
 	var chunks []*logging.StreamChunk
 
 	for scanner.Scan() {
@@ -612,12 +648,18 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 
 		stats, hasExtra := parser.ParseOllamaJSONL(line)
 		if stats != nil {
-			model = stats.Model
+			if stats.Model != "" {
+				model = stats.Model
+			}
+			if trackedModel == "" && stats.Model != "" {
+				trackedModel = stats.Model
+				p.recordModelRequest(trackedModel)
+			}
 			done := stats.Done || stats.EvalCount > 0
 			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
 				ChunkType: "text",
-				Model:     stats.Model,
+				Model:     trackedModel,
 				Done:      done,
 				TokenCnt:  stats.EvalCount,
 				Time:      time.Now().UTC().Format(time.RFC3339Nano),
@@ -626,12 +668,12 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 				chunks = append(chunks, &logging.StreamChunk{
 					ID:        id,
 					ChunkType: "extra",
-					Model:     stats.Model,
+					Model:     trackedModel,
 					Time:      time.Now().UTC().Format(time.RFC3339Nano),
 				})
 			}
 			if stats.Done == true {
-				p.recordModelUsage(model, int64(stats.PromptEval), int64(stats.EvalCount))
+				p.recordModelUsage(trackedModel, stats.PromptEval, stats.EvalCount)
 			}
 		} else if p.cfg.CaptureStreamChunks {
 			chunks = append(chunks, &logging.StreamChunk{
@@ -657,11 +699,17 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 	if len(chunks) > 0 {
 		p.logger.WriteStreamChunks(chunks)
 	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("ollama-tap: NDJSON stream scan failed for %s: %v", id, err)
+	}
 
 	// Send [DONE] marker so streaming clients (github.copilot-chat, OpenAI SDK) know the stream completed.
 	w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
 
+	if trackedModel != "" {
+		return trackedModel
+	}
 	return model
 }
 
@@ -705,15 +753,17 @@ func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWr
 
 		if parser.IsUsageEvent(obj) {
 			usage := parser.ParseOpenAIUsage(obj)
-			p.recordModelUsage(model, usage.PromptTokens, usage.CompletionTokens)
-			chunks = append(chunks, &logging.StreamChunk{
-				ID:        id,
-				ChunkType: "usage",
-				Model:     model,
-				TokenCnt:  usage.CompletionTokens,
-				Done:      true,
-				Time:      time.Now().UTC().Format(time.RFC3339Nano),
-			})
+			if usage != nil {
+				p.recordModelUsage(model, usage.PromptTokens, usage.CompletionTokens)
+				chunks = append(chunks, &logging.StreamChunk{
+					ID:        id,
+					ChunkType: "usage",
+					Model:     model,
+					TokenCnt:  usage.CompletionTokens,
+					Done:      true,
+					Time:      time.Now().UTC().Format(time.RFC3339Nano),
+				})
+			}
 		} else if delta, _ := parser.ExtractDelta(obj); delta != "" {
 			chunks = append(chunks, &logging.StreamChunk{
 				ID:        id,
@@ -745,6 +795,9 @@ func (p *Proxy) handleSSE(ctx context.Context, body io.Reader, w http.ResponseWr
 
 	if len(chunks) > 0 {
 		p.logger.WriteStreamChunks(chunks)
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("ollama-tap: SSE stream scan failed for %s: %v", id, err)
 	}
 
 	return model
@@ -780,12 +833,44 @@ func (p *Proxy) logSummary(id, streamType string, start time.Time, method, path 
 	return nil
 }
 
-// recordModelUsage records per-model usage data in the tracker.
+// recordModelRequest records a request for the given model in the tracker.
+func (p *Proxy) recordModelRequest(modelName string) {
+	if p.tracker == nil || modelName == "" {
+		return
+	}
+	p.tracker.RecordRequest(modelName)
+}
+
+// recordModelUsage records per-model token usage data in the tracker.
 func (p *Proxy) recordModelUsage(modelName string, promptTokens, completionTokens int64) {
 	if p.tracker == nil || modelName == "" {
 		return
 	}
-	p.tracker.Record(modelName, promptTokens, completionTokens)
+	p.tracker.RecordTokens(modelName, promptTokens, completionTokens)
+}
+
+func extractRequestModel(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return ""
+	}
+	return req.Model
+}
+
+func tracksModelUsage(path string) bool {
+	switch {
+	case strings.HasPrefix(path, "/api/chat"), strings.HasPrefix(path, "/api/generate"):
+		return true
+	case strings.HasPrefix(path, "/v1/chat/completions"), strings.HasPrefix(path, "/v1/generate"), strings.HasPrefix(path, "/v1/responses"):
+		return true
+	default:
+		return false
+	}
 }
 
 func headerMap(h http.Header) map[string][]string {

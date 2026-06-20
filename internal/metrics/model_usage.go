@@ -55,18 +55,56 @@ func (t *ModelUsageTracker) Record(modelName string, promptTokens, completionTok
 	if modelName == "" {
 		return
 	}
-	v, _ := t.data.LoadOrStore(modelName, &ModelUsage{})
-	u := v.(*ModelUsage)
+	u := t.ensureModel(modelName)
 	atomic.AddInt64(&u.PromptTokens, promptTokens)
 	atomic.AddInt64(&u.CompletionTokens, completionTokens)
 	atomic.AddInt64(&u.TotalTokens, promptTokens+completionTokens)
 	atomic.AddInt64(&u.RequestCount, 1)
-	t.lastAccess.Store(modelName, time.Now().UnixNano())
+	t.touch(modelName)
 
 	// Trigger periodic eviction if we exceed the limit.
 	if t.maxModels > 0 {
 		t.maybeEvict()
 	}
+}
+
+// RecordRequest increments the request count for a model without changing token totals.
+func (t *ModelUsageTracker) RecordRequest(modelName string) {
+	if modelName == "" {
+		return
+	}
+	u := t.ensureModel(modelName)
+	atomic.AddInt64(&u.RequestCount, 1)
+	t.touch(modelName)
+
+	if t.maxModels > 0 {
+		t.maybeEvict()
+	}
+}
+
+// RecordTokens adds token usage for a model without incrementing request count.
+func (t *ModelUsageTracker) RecordTokens(modelName string, promptTokens, completionTokens int64) {
+	if modelName == "" {
+		return
+	}
+	u := t.ensureModel(modelName)
+	atomic.AddInt64(&u.PromptTokens, promptTokens)
+	atomic.AddInt64(&u.CompletionTokens, completionTokens)
+	atomic.AddInt64(&u.TotalTokens, promptTokens+completionTokens)
+	t.touch(modelName)
+
+	if t.maxModels > 0 {
+		t.maybeEvict()
+	}
+}
+
+func (t *ModelUsageTracker) ensureModel(modelName string) *ModelUsage {
+	v, _ := t.data.LoadOrStore(modelName, &ModelUsage{})
+	return v.(*ModelUsage)
+}
+
+func (t *ModelUsageTracker) touch(modelName string) {
+	t.lastAccess.Store(modelName, time.Now().UnixNano())
 }
 
 // Snapshot returns a copy of all tracked model usage.
