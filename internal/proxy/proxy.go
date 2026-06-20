@@ -152,6 +152,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		isUpstreamStreaming = isRequestStream(r.URL.Path, bodyBytes)
 	}
 
+	// Streaming and non-streaming paths are mutually exclusive (if/else above).
+	// recordModelUsage fires exactly once: in handleStreaming when Done==true, or here below for non-streaming.
 	if isUpstreamStreaming {
 		p.metrics.IncrementStreaming()
 		defer p.metrics.DecrementStreaming()
@@ -226,6 +228,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					if err == nil && stats.EvalCount > 0 {
 						completionTokens = int64(stats.EvalCount)
 					}
+				// Expected /v1/chat/completions response structure:
+				// {"model": "...", "usage": {"prompt_tokens": N, "completion_tokens": M, "total_tokens": N+M}}
 				} else if r.URL.Path == "/v1/chat/completions" {
 					usage, err := parser.ParseOpenAIChatNonStreaming(bodyData)
 					if err == nil && usage != nil {
@@ -355,7 +359,12 @@ func isRequestStream(path string, body []byte) bool {
 	if !ok {
 		return false
 	}
-	return string(streamRaw) == "true"
+	s := strings.TrimSpace(string(streamRaw))
+	// Strip surrounding quotes if stream is encoded as a JSON string rather than a boolean.
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	return s == "true"
 }
 
 // handleStreaming forwards the response body incrementally while extracting stats.

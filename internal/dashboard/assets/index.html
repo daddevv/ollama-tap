@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ollama-tap — Dashboard</title>
+<!--
+  Dependency note: Chart.js is loaded from a public CDN.
+  If deploying behind HTTPS-only policies or restricted egress firewalls,
+  consider embedding a local copy of chart.umd.min.js in assets/ and
+  updating the src path below accordingly.
+-->
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}

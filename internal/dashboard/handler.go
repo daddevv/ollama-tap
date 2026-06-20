@@ -74,5 +74,6 @@ func respondJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("dashboard: JSON encode error: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
 	}
 }
