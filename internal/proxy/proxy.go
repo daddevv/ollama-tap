@@ -162,6 +162,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if w.Header().Get("Content-Type") == "" {
 			w.Header().Set("Content-Type", "text/event-stream")
 		}
+		// Ensure SSE-critical headers so clients like github.copilot-chat don't buffer or drop the stream.
+		if w.Header().Get("Cache-Control") == "" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		if w.Header().Get("Connection") == "" {
+			w.Header().Set("Connection", "keep-alive")
+		}
+		if w.Header().Get("X-Accel-Buffering") == "" {
+			w.Header().Set("X-Accel-Buffering", "no")
+		}
 
 		// Buffer resp.Body so detectStreamFormat can peek at format without consuming bytes.
 		bodyData, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -235,8 +245,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					if err == nil && stats.EvalCount > 0 {
 						completionTokens = int64(stats.EvalCount)
 					}
-				// Expected /v1/chat/completions response structure:
-				// {"model": "...", "usage": {"prompt_tokens": N, "completion_tokens": M, "total_tokens": N+M}}
+					// Expected /v1/chat/completions response structure:
+					// {"model": "...", "usage": {"prompt_tokens": N, "completion_tokens": M, "total_tokens": N+M}}
 				} else if r.URL.Path == "/v1/chat/completions" {
 					usage, err := parser.ParseOpenAIChatNonStreaming(bodyData)
 					if err == nil && usage != nil {
@@ -491,9 +501,9 @@ func (p *Proxy) handleStreaming(ctx context.Context, w http.ResponseWriter, body
 type streamFormat int
 
 const (
-	formatUnknown  streamFormat = iota // not a recognized stream format
-	formatSSE                          // Server-Sent Events (OpenAI-compatible)
-	formatNDJSON                       // Ollama native newline-delimited JSON
+	formatUnknown streamFormat = iota // not a recognized stream format
+	formatSSE                         // Server-Sent Events (OpenAI-compatible)
+	formatNDJSON                      // Ollama native newline-delimited JSON
 )
 
 // handleSSEPassthrough forwards an SSE-formatted response body to the client.
@@ -584,11 +594,12 @@ func (p *Proxy) handleSSEPassthrough(ctx context.Context, body io.Reader, w http
 		p.logger.WriteStreamChunks(chunks)
 	}
 
+	// Send [DONE] marker so SSE clients (github.copilot-chat, OpenAI SDK) know the stream completed.
+	w.Write([]byte("data: [DONE]\n\n"))
+	flusher.Flush()
+
 	return model
 }
-
-
-// handleNDJSON reads Ollama native newline-delimited JSON and streams it to the client.
 func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.ResponseWriter, flusher http.Flusher, id string) string {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
@@ -639,7 +650,8 @@ func (p *Proxy) handleNDJSON(ctx context.Context, body io.Reader, w http.Respons
 			})
 		}
 
-		w.Write([]byte(line + "\n"))
+		// Wrap in SSE format so clients like github.copilot-chat can parse the stream.
+		w.Write([]byte("data: " + line + "\n\n"))
 
 		if len(chunks) >= streamChunkFlushThreshold {
 			if err := p.logger.WriteStreamChunks(chunks); err != nil {

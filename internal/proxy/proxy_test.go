@@ -189,11 +189,18 @@ func TestNDJSONStreamMultipleChunks(t *testing.T) {
 		t.Errorf("model = %q, want qwen3.6", model)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("got %d lines, want 3", len(lines))
+	// SSE output: each chunk is "data: {...}\n\n" so data lines alternate with blanks.
+	var dataLines []string
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, "data: ") {
+			dataLines = append(dataLines, strings.TrimPrefix(ln, "data: "))
+		}
+	}
+	if len(dataLines) != 4 { // 3 chunks + [DONE]
+		t.Fatalf("got %d SSE data lines, want 4", len(dataLines))
 	}
 	var last map[string]any
-	json.Unmarshal([]byte(lines[2]), &last)
+	json.Unmarshal([]byte(dataLines[2]), &last)
 	if !last["done"].(bool) || int(last["eval_count"].(float64)) != 5 {
 		t.Error("expected done=true, eval_count=5")
 	}

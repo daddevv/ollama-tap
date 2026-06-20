@@ -8,39 +8,39 @@ import (
 
 // RingStore maintains a ring buffer of periodic snapshots of cumulative counters.
 type RingStore struct {
-	buffer      []snapshotSlot
-	head        atomic.Int64
-	size        int64
-	tickSec     int64
-	stopped     chan struct{}
-	mu          sync.RWMutex
-	upstream    *Metrics
-	tracker     *ModelUsageTracker
+	buffer   []snapshotSlot
+	head     atomic.Int64
+	size     int64
+	tickSec  int64
+	stopped  chan struct{}
+	mu       sync.RWMutex
+	upstream *Metrics
+	tracker  *ModelUsageTracker
 }
 
 type snapshotSlot struct {
-	timestamp    time.Time
-	totalReqs    int64
-	streaming    int64
-	nonStreaming int64
-	failures     int64
-	activeConns  int64
-	promptTokens int64
+	timestamp        time.Time
+	totalReqs        int64
+	streaming        int64
+	nonStreaming     int64
+	failures         int64
+	activeConns      int64
+	promptTokens     int64
 	completionTokens int64
 }
 
 // HistoryEntry is a delta snapshot suitable for chart rendering.
 type HistoryEntry struct {
-	Label        string    `json:"label"`
-	Timestamp    time.Time `json:"timestamp"`
-	BucketSeconds int64    `json:"bucket_seconds"`
-	TotalReqs    int64     `json:"total_reqs_delta"`
-	Streaming    int64     `json:"streaming_delta"`
-	NonStreaming int64     `json:"non_streaming_delta"`
-	Failures     int64     `json:"failures_delta"`
-	Successful   int64     `json:"successful_delta"`
-	PromptTokens int64     `json:"prompt_tokens_delta"`
-	CompletionTokens int64 `json:"completion_tokens_delta"`
+	Label            string    `json:"label"`
+	Timestamp        time.Time `json:"timestamp"`
+	BucketSeconds    int64     `json:"bucket_seconds"`
+	TotalReqs        int64     `json:"total_reqs_delta"`
+	Streaming        int64     `json:"streaming_delta"`
+	NonStreaming     int64     `json:"non_streaming_delta"`
+	Failures         int64     `json:"failures_delta"`
+	Successful       int64     `json:"successful_delta"`
+	PromptTokens     int64     `json:"prompt_tokens_delta"`
+	CompletionTokens int64     `json:"completion_tokens_delta"`
 }
 
 // ModelData captures per-model token usage at a snapshot point.
@@ -55,12 +55,12 @@ type ModelData struct {
 // Buffer holds 24 hours of data at 5-second intervals (17,280 slots).
 func NewRingStore(m *Metrics, tracker *ModelUsageTracker) *RingStore {
 	s := &RingStore{
-		buffer:      make([]snapshotSlot, 17280), // 24h × 3600s / 5s = 17280 slots
-		size:        17280,
-		tickSec:     5,
-		stopped:     make(chan struct{}),
-		upstream:    m,
-		tracker:     tracker,
+		buffer:   make([]snapshotSlot, 17280), // 24h × 3600s / 5s = 17280 slots
+		size:     17280,
+		tickSec:  5,
+		stopped:  make(chan struct{}),
+		upstream: m,
+		tracker:  tracker,
 	}
 	s.head.Store(-1)
 	go s.ticker()
@@ -87,17 +87,17 @@ func (s *RingStore) tick() {
 	if s.tracker != nil {
 		totals = s.tracker.Totals()
 	}
-	idx := ((s.head.Add(1) + s.size) % s.size + s.size) % s.size
+	idx := ((s.head.Add(1)+s.size)%s.size + s.size) % s.size
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.buffer[idx] = snapshotSlot{
-		timestamp:    time.Now().UTC(),
-		totalReqs:    m.totalRequests.Load(),
-		streaming:    int64(m.streamingCount.Load()),
-		nonStreaming: int64(m.nonStreamingCount.Load()),
-		failures:     m.failedRequests.Load(),
-		activeConns:  m.activeConnections.Load(),
-		promptTokens: totals.PromptTokens,
+		timestamp:        time.Now().UTC(),
+		totalReqs:        m.totalRequests.Load(),
+		streaming:        int64(m.streamingCount.Load()),
+		nonStreaming:     int64(m.nonStreamingCount.Load()),
+		failures:         m.failedRequests.Load(),
+		activeConns:      m.activeConnections.Load(),
+		promptTokens:     totals.PromptTokens,
 		completionTokens: totals.CompletionTokens,
 	}
 }
@@ -123,8 +123,8 @@ func (s *RingStore) Snapshot() map[string]interface{} {
 		bufTS = bufSlot.timestamp
 	}
 	return map[string]interface{}{
-		"timestamp":               bufTS,
-		"active_connections":      s.upstream.activeConnections.Load(),
+		"timestamp":          bufTS,
+		"active_connections": s.upstream.activeConnections.Load(),
 	}
 }
 
@@ -177,8 +177,8 @@ func (s *RingStore) History(nMinutes int) []HistoryEntry {
 	deltaEntries := make([]HistoryEntry, 0, len(entries))
 	for i, e := range entries {
 		delta := HistoryEntry{
-			Label:        e.timestamp.Format("15:04:05"),
-			Timestamp:    e.timestamp,
+			Label:         e.timestamp.Format("15:04:05"),
+			Timestamp:     e.timestamp,
 			BucketSeconds: s.tickSec,
 		}
 		if i == 0 {
@@ -186,7 +186,7 @@ func (s *RingStore) History(nMinutes int) []HistoryEntry {
 			continue
 		}
 
-			prev := entries[i-1]
+		prev := entries[i-1]
 		if e.totalReqs < prev.totalReqs || e.streaming < prev.streaming || e.nonStreaming < prev.nonStreaming || e.failures < prev.failures || e.promptTokens < prev.promptTokens || e.completionTokens < prev.completionTokens {
 			deltaEntries = append(deltaEntries, delta)
 			continue
@@ -196,7 +196,7 @@ func (s *RingStore) History(nMinutes int) []HistoryEntry {
 		delta.Streaming = e.streaming - prev.streaming
 		delta.NonStreaming = e.nonStreaming - prev.nonStreaming
 		delta.Failures = e.failures - prev.failures
-		delta.Successful = max((e.totalReqs-e.failures)-(prev.totalReqs-prev.failures), 0)
+		delta.Successful = (e.totalReqs - e.failures) - (prev.totalReqs - prev.failures)
 		delta.PromptTokens = e.promptTokens - prev.promptTokens
 		delta.CompletionTokens = e.completionTokens - prev.completionTokens
 		deltaEntries = append(deltaEntries, delta)
@@ -221,8 +221,8 @@ func (s *RingStore) HistorySeries(nMinutes, maxPoints int) []HistoryEntry {
 		}
 
 		bucket := HistoryEntry{
-			Label:     history[end-1].Label,
-			Timestamp: history[end-1].Timestamp,
+			Label:         history[end-1].Label,
+			Timestamp:     history[end-1].Timestamp,
 			BucketSeconds: int64(end-start) * s.tickSec,
 		}
 		for _, entry := range history[start:end] {
