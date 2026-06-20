@@ -207,7 +207,7 @@ if [ "$upstream_ok" = "true" ]; then
     -H "Content-Type: application/json" \
     -d "{
       \"model\": \"$MODEL\",
-      \"prompt\": '$TEMP_PROMPT',
+      \"prompt\": \"$TEMP_PROMPT\",
       \"stream\": false
     }" || true)
 
@@ -232,11 +232,11 @@ check "stats.total_requests > 0 after tests" "$( [ "$total" -gt 0 ] 2>/dev/null 
 active=$(echo "$resp" | jq -r '.active_connections' 2>/dev/null || echo "-1")
 check "no lingering active connections" "$( [ "$active" = "0" ] && echo true || echo false )"
 
-streaming_conn=$(echo "$resp" | jq -r '.streaming_connections' 2>/dev/null || echo "-1")
+streaming_conn=$(echo "$resp" | jq -r '.active_streaming_connections' 2>/dev/null || echo "-1")
 check "no lingering streaming connections" "$( [ "$streaming_conn" = "0" ] && echo true || echo false )"
 
 resp=$(curl -sf --max-time 5 "$PROXY/_tap/dashboard/api/snapshot")
-check "dashboard snapshot reflects requests" "$(echo "$resp" | jq 'has("total_requests") and .total_requests > 0' -r 2>/dev/null || echo false)"
+check "dashboard snapshot reflects requests" "$(echo "$resp" | jq 'has("request_count") and .total_requests > 0' -r 2>/dev/null || echo false)"
 
 resp=$(curl -sf --max-time 5 "$PROXY/_tap/dashboard/api/history?minutes=5")
 history_count=$(echo "$resp" | jq 'length' 2>/dev/null || echo "0")
@@ -245,7 +245,7 @@ check "dashboard history has entries" "$( [ "$history_count" -gt 0 ] 2>/dev/null
 resp=$(curl -sf --max-time 5 "$PROXY/_tap/dashboard/api/models")
 model_keys=$(echo "$resp" | jq 'keys | length' 2>/dev/null || echo "0")
 if [ "$model_keys" -gt 0 ] 2>/dev/null; then
-  check "model usage tracker has entries" "$(echo "$resp" | jq '.[keys[0]] | has("total_requests")' -r 2>/dev/null || echo false)"
+  check "model usage tracker has entries" "$(echo "$resp" | jq '.[keys[0]] | has("request_count")' -r 2>/dev/null || echo false)"
 else
   warn "model usage tracker empty (metrics may not have ticked yet)"
 fi

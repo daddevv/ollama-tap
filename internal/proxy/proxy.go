@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
@@ -75,37 +76,30 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var reqBodyTruncated bool
 	bodyBytes := make([]byte, 0)
 
-	if p.cfg.CaptureRequests {
-		reqBodyTruncated = false
-		var readErr error
-		bodyBytes, readErr = io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if readErr == nil && len(bodyBytes) > 0 {
-			reqBodyTruncated = len(bodyBytes) == int(1<<20)
-		} else if bodyBytes == nil {
-			bodyBytes = make([]byte, 0)
-		}
-		r.Body.Close()
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if readErr == nil && len(bodyBytes) > 0 {
+		reqBodyTruncated = len(bodyBytes) == int(1<<20)
+	} else if bodyBytes == nil {
+		bodyBytes = make([]byte, 0)
+	}
+	r.Body.Close()
 
-		if len(bodyBytes) > 0 {
-			if err := p.logger.WriteRequestLog(&logging.RequestLog{
-				ID:            id,
-				Model:         "",
-				ReqType:       streamType,
-				Method:        r.Method,
-				Path:          r.URL.Path,
-				URL:           r.URL.String(),
-				Headers:       headerMap(r.Header),
-				Body:          string(bodyBytes[:min(len(bodyBytes), 4096)]),
-				BodyTruncated: reqBodyTruncated,
-				Time:          time.Now().UTC().Format(time.RFC3339Nano),
-			}); err != nil {
-				log.Printf("ollama-tap: failed to write request log for %s: %v", id, err)
-				p.metrics.RecordLogFailure()
-			}
+	if p.cfg.CaptureRequests && len(bodyBytes) > 0 {
+		if err := p.logger.WriteRequestLog(&logging.RequestLog{
+			ID:            id,
+			Model:         "",
+			ReqType:       streamType,
+			Method:        r.Method,
+			Path:          r.URL.Path,
+			URL:           r.URL.String(),
+			Headers:       headerMap(r.Header),
+			Body:          string(bodyBytes[:min(len(bodyBytes), 4096)]),
+			BodyTruncated: reqBodyTruncated,
+			Time:          time.Now().UTC().Format(time.RFC3339Nano),
+		}); err != nil {
+			log.Printf("ollama-tap: failed to write request log for %s: %v", id, err)
+			p.metrics.RecordLogFailure()
 		}
-	} else {
-		// No capture needed — forward original body directly.
-		bodyBytes = nil
 	}
 
 	start := time.Now()
@@ -153,9 +147,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Copy response headers to client (strip hop-by-hop).
 	copyNonReservedHeaders(w.Header(), resp.Header)
 	// Read body first (before writing headers) so we can flag truncation.
-	isUpstreamStreaming := isStreamResponse(resp) || r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate"
+	isUpstreamStreaming := isStreamResponse(resp)
+	if !isUpstreamStreaming && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/generate") {
+		isUpstreamStreaming = isRequestStream(r.URL.Path, bodyBytes)
+	}
 
 	if isUpstreamStreaming {
+		p.metrics.IncrementStreaming()
+		defer p.metrics.DecrementStreaming()
 		if w.Header().Get("Content-Type") == "" {
 			w.Header().Set("Content-Type", "text/event-stream")
 		}
@@ -199,6 +198,43 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if err := p.logSummary(id, streamType, start, r.Method, r.URL.Path, bodyData, "", nil, ""); err != nil {
 			log.Printf("ollama-tap: failed to write summary for %s: %v", id, err)
+		}
+
+		// Record model usage for non-streaming responses so the tracker gets entries.
+		if len(bodyData) > 0 && p.tracker != nil {
+			var modelName string
+			if len(bodyBytes) > 0 {
+				var raw map[string]json.RawMessage
+				if err := json.Unmarshal(bodyBytes, &raw); err == nil {
+					if m, ok := raw["model"]; ok {
+						json.Unmarshal(m, &modelName)
+					}
+				}
+			}
+			if modelName == "" && len(bodyData) > 0 {
+				var raw map[string]json.RawMessage
+				if err := json.Unmarshal(bodyData, &raw); err == nil {
+					if m, ok := raw["model"]; ok {
+						json.Unmarshal(m, &modelName)
+					}
+				}
+			}
+			if modelName != "" {
+				var promptTokens, completionTokens int64
+				if r.URL.Path == "/api/generate" || r.URL.Path == "/api/chat" {
+					stats, err := parser.ParseOllamaNonStreaming(bodyData)
+					if err == nil && stats.EvalCount > 0 {
+						completionTokens = int64(stats.EvalCount)
+					}
+				} else if r.URL.Path == "/v1/chat/completions" {
+					usage, err := parser.ParseOpenAIChatNonStreaming(bodyData)
+					if err == nil && usage != nil {
+						promptTokens = usage.PromptTokens
+						completionTokens = usage.CompletionTokens
+					}
+				}
+				p.recordModelUsage(modelName, promptTokens, completionTokens)
+			}
 		}
 	}
 
@@ -301,6 +337,25 @@ func isStreamResponse(resp *http.Response) bool {
 	ct := resp.Header.Get("Content-Type")
 	return strings.Contains(ct, "text/event-stream") ||
 		strings.Contains(ct, "application/x-ndjson")
+}
+
+// isRequestStream checks if the request body explicitly sets stream=true.
+func isRequestStream(path string, body []byte) bool {
+	if !strings.Contains(path, "/api/generate") && !strings.Contains(path, "/api/chat") {
+		return false
+	}
+	if len(body) == 0 {
+		return false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return false
+	}
+	streamRaw, ok := raw["stream"]
+	if !ok {
+		return false
+	}
+	return string(streamRaw) == "true"
 }
 
 // handleStreaming forwards the response body incrementally while extracting stats.

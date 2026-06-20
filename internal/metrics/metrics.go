@@ -15,6 +15,7 @@ type Metrics struct {
 	failedRequests     atomic.Int64
 	truncatedResponses atomic.Int64
 	logFailures        atomic.Int64
+	activeStreaming    atomic.Int64
 
 	firstSeen   time.Time
 	lastSeenSec int64 // Unix seconds, for atomic access
@@ -46,18 +47,22 @@ func (m *Metrics) RecordFailure()    { m.failedRequests.Add(1) }
 func (m *Metrics) RecordTruncated()  { m.truncatedResponses.Add(1) }
 func (m *Metrics) RecordLogFailure() { m.logFailures.Add(1) }
 
+func (m *Metrics) IncrementStreaming()  { m.activeStreaming.Add(1) }
+func (m *Metrics) DecrementStreaming()  { m.activeStreaming.Add(-1) }
+
 type Snapshot struct {
 	TotalRequests     int64  `json:"total_requests"`
 	Uptime            string `json:"uptime"`
 	LastRequest       int64  `json:"last_request_unix"`
 	StreamingCount    int64  `json:"streaming_connections"`
-	NonStreamingCount int64  `json:"non_streaming_connections"`
 	ActiveConnections int64  `json:"active_connections"`
+	ActiveStreaming   int64  `json:"active_streaming_connections"`
 	UplinkBytes       int64  `json:"uplink_bytes"`
 	DownlinkBytes     int64  `json:"downlink_bytes"`
 	Failures          int64  `json:"failed_requests"`
 	Truncated         int64  `json:"truncated_responses"`
-	LogFailures       int64  `json:"log_failures"`
+	LogFailures         int64  `json:"log_failures"`
+	NonStreamingCount   int64  `json:"non_streaming_connections"`
 }
 
 func (m *Metrics) Snapshot() Snapshot {
@@ -72,6 +77,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		DownlinkBytes:     m.totalClientBytes.Load(),
 		Failures:          m.failedRequests.Load(),
 		Truncated:         m.truncatedResponses.Load(),
-		LogFailures:       m.logFailures.Load(),
+		LogFailures:        m.logFailures.Load(),
+		ActiveStreaming:    m.activeStreaming.Load(),
 	}
 }
